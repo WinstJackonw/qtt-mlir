@@ -1,19 +1,37 @@
-# Plain assert-based unit tests (no gtest available in this environment),
-# registered with CTest.
-
-set(QTT_UNIT_TEST_DEPS
+# Lightweight tests with checks active in all build configurations.
+add_executable(QTTDialectTests QTTDialectTests.cpp)
+target_link_libraries(QTTDialectTests PRIVATE
   QTTMLIRQTTIR
-  MLIRIR
   MLIRParser
-  MLIRSupport
   MLIRFuncDialect
 )
+target_compile_definitions(QTTDialectTests PRIVATE
+  "QTT_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
 
-foreach(test_source QTTDialectTest.cpp)
-  get_filename_component(test_name ${test_source} NAME_WE)
-
-  add_executable(${test_name} ${test_source})
-  target_link_libraries(${test_name} PRIVATE ${QTT_UNIT_TEST_DEPS})
-
-  add_test(NAME ${test_name} COMMAND ${test_name})
+# Keep each behavior independently selectable and visible in CTest output.
+foreach(test_case
+  DialectRegistration
+  ADTTypeRoundtrip
+  ADTTypeConflictRejected
+  ADTDuplicateCtorRejected
+  CtorTypeRoundtrip
+  CtorOfUndefinedADTAccepted
+  CtorUnknownConstructorRejected
+  UnknownTypeRejected
+  IsSubType
+  ConstructUpcastRoundtrip
+  PayloadMismatchRejected
+  CrossADTUpcastRejected
+  ADTRecursiveRoundtrip
+  ADTDefinitionLifecycle
+  ConstructArityRoundtrip
+  ConstructWrongResult
+  ConstructTooFewArguments
+  ConstructTooManyArguments
+  UpcastWrongInput
+  UpcastWrongResult
+  CtorPayloadCoexists
+  ADTInvalidEntryRejected
+)
+  add_test(NAME QTT.${test_case} COMMAND QTTDialectTests ${test_case})
 endforeach()

@@ -1,0 +1,392 @@
+// QTT dialect behavior tests; textual inputs live in data/.
+#include "TestSupport.h"
+
+namespace {
+using namespace qtt_test;
+
+//===----------------------------------------------------------------------===//
+// Dialect registration.
+//===----------------------------------------------------------------------===//
+
+void testDialectRegistration() {
+  mlir::MLIRContext ctx;
+  loadDialects(ctx);
+  EXPECT(ctx.getLoadedDialect<mlir::qtt::QTTDialect>() != nullptr);
+  EXPECT(ctx.getLoadedDialect("qtt") != nullptr);
+}
+
+//===----------------------------------------------------------------------===//
+// Types.
+//===----------------------------------------------------------------------===//
+
+void testADTTypeRoundtrip() {
+  mlir::MLIRContext ctx;
+  loadDialects(ctx);
+
+  std::vector<std::string> lines = readDataLines("adt_roundtrip.mlir");
+  REQUIRE(lines.size() == 2);
+
+  mlir::Type type = mlir::parseType(lines[0], &ctx);
+  REQUIRE(type != nullptr);
+
+  auto adt = llvm::dyn_cast<mlir::qtt::ADTType>(type);
+  REQUIRE(adt != nullptr);
+
+  EXPECT(adt.isInitialized());
+  EXPECT(adt.getCtors().size() == 2);
+
+  mlir::qtt::CtorType lit = adt.lookupCtor(mlir::StringAttr::get(&ctx, "Lit"));
+  REQUIRE(lit);
+  REQUIRE(lit.getPayload().size() == 1);
+  EXPECT(lit.getPayload()[0] == mlir::IntegerType::get(&ctx, 64));
+  EXPECT(!adt.lookupCtor(mlir::StringAttr::get(&ctx, "Missing")));
+  EXPECT(printType(type) == lines[0]);
+
+  // The short reference form must resolve to the same uniqued type.
+  mlir::Type again = mlir::parseType(lines[1], &ctx);
+  EXPECT(again == type);
+}
+
+void testADTTypeConflictRejected() {
+  mlir::MLIRContext ctx;
+  loadDialects(ctx);
+  DiagnosticCapture diags(ctx);
+
+  std::vector<std::string> lines = readDataLines("adt_conflict.mlir");
+  REQUIRE(lines.size() == 2);
+
+  EXPECT(mlir::parseType(lines[0], &ctx) != nullptr);
+  EXPECT(mlir::parseType(lines[1], &ctx) == nullptr);
+  EXPECT(diags.contains("conflicting definition of ADT"));
+}
+
+void testADTDuplicateCtorRejected() {
+  mlir::MLIRContext ctx;
+  loadDialects(ctx);
+  DiagnosticCapture diags(ctx);
+
+  std::vector<std::string> lines = readDataLines("adt_duplicate_ctor.mlir");
+  REQUIRE(lines.size() == 1);
+
+  EXPECT(mlir::parseType(lines[0], &ctx) == nullptr);
+  EXPECT(diags.contains("duplicate constructor name"));
+}
+
+void testCtorTypeRoundtrip() {
+  mlir::MLIRContext ctx;
+  loadDialects(ctx);
+
+  std::vector<std::string> lines = readDataLines("ctor_roundtrip.mlir");
+  REQUIRE(lines.size() == 2);
+
+  mlir::Type adtType = mlir::parseType(lines[0], &ctx);
+  REQUIRE(adtType != nullptr);
+  auto adt = llvm::dyn_cast<mlir::qtt::ADTType>(adtType);
+  EXPECT(adt != nullptr);
+
+  mlir::Type type = mlir::parseType(lines[1], &ctx);
+  REQUIRE(type != nullptr);
+
+  auto ctor = llvm::dyn_cast<mlir::qtt::CtorType>(type);
+  REQUIRE(ctor != nullptr);
+
+  EXPECT(ctor.getParent() == adt);
+  // The ADT stores this very CtorType, not just its name.
+  EXPECT(adt.lookupCtor(mlir::StringAttr::get(&ctx, "Lit")) == ctor);
+  REQUIRE(ctor.getPayload().size() == 1);
+  EXPECT(ctor.getPayload()[0] == mlir::IntegerType::get(&ctx, 64));
+  EXPECT(printType(type) == lines[1]);
+}
+
+void testCtorOfUndefinedADTAccepted() {
+  mlir::MLIRContext ctx;
+  loadDialects(ctx);
+
+  std::vector<std::string> lines = readDataLines("ctor_incomplete_adt.mlir");
+  REQUIRE(lines.size() == 1);
+
+  mlir::Type type = mlir::parseType(lines[0], &ctx);
+  REQUIRE(type != nullptr);
+
+  // The constructor carries its own payload, so it is fully defined even
+  // though the referenced ADT never was.
+  auto ctor = llvm::dyn_cast<mlir::qtt::CtorType>(type);
+  REQUIRE(ctor != nullptr);
+  EXPECT(!ctor.getParent().isInitialized());
+  EXPECT(ctor.getPayload().empty());
+  EXPECT(printType(type) == lines[0]);
+}
+
+void testCtorUnknownConstructorRejected() {
+  mlir::MLIRContext ctx;
+  loadDialects(ctx);
+  DiagnosticCapture diags(ctx);
+
+  std::vector<std::string> lines = readDataLines("ctor_unknown_constructor.mlir");
+  REQUIRE(lines.size() == 2);
+
+  EXPECT(mlir::parseType(lines[0], &ctx) != nullptr);
+  EXPECT(mlir::parseType(lines[1], &ctx) == nullptr);
+  EXPECT(diags.contains("has no constructor"));
+}
+
+void testUnknownTypeRejected() {
+  mlir::MLIRContext ctx;
+  loadDialects(ctx);
+  DiagnosticCapture diags(ctx);
+
+  std::vector<std::string> lines = readDataLines("unknown_type.mlir");
+  REQUIRE(lines.size() == 1);
+
+  EXPECT(mlir::parseType(lines[0], &ctx) == nullptr);
+  EXPECT(diags.contains("type `unknown`"));
+}
+
+void testIsSubType() {
+  mlir::MLIRContext ctx;
+  loadDialects(ctx);
+
+  std::vector<std::string> lines = readDataLines("subtype.mlir");
+  REQUIRE(lines.size() == 3);
+
+  mlir::Type expr = mlir::parseType(lines[0], &ctx);
+  mlir::Type other = mlir::parseType(lines[1], &ctx);
+  mlir::Type ctor = mlir::parseType(lines[2], &ctx);
+  EXPECT(expr != nullptr);
+  EXPECT(other != nullptr);
+  EXPECT(ctor != nullptr);
+  if (!expr || !other || !ctor)
+    return;
+
+  EXPECT(mlir::qtt::isSubType(expr, expr));
+  EXPECT(mlir::qtt::isSubType(ctor, expr));
+  EXPECT(!mlir::qtt::isSubType(other, expr));
+  EXPECT(!mlir::qtt::isSubType(expr, ctor));
+}
+
+//===----------------------------------------------------------------------===//
+// Operations.
+//===----------------------------------------------------------------------===//
+
+void testConstructUpcastRoundtrip() {
+  mlir::MLIRContext ctx;
+  loadDialects(ctx);
+
+  std::string ir = readDataFile("construct_upcast.mlir");
+  if (ir.empty())
+    return;
+
+  mlir::OwningOpRef<mlir::ModuleOp> mod;
+  std::string printed = roundtrip(ctx, mod, ir);
+  if (printed.empty())
+    return;
+
+  EXPECT(printed.find("qtt.construct") != std::string::npos);
+  EXPECT(printed.find("qtt.upcast") != std::string::npos);
+  EXPECT(printed.find("!qtt.ctor<\"expr\", \"Lit\"(i64)>") != std::string::npos);
+  EXPECT(printed.find("!qtt.adt<\"expr\"") != std::string::npos);
+  EXPECT(mod->lookupSymbol<mlir::func::FuncOp>("make") != nullptr);
+}
+
+void testPayloadMismatchRejected() {
+  expectVerifierFailure("payload_mismatch.mlir", "constructor payload type mismatch");
+}
+
+void testCrossADTUpcastRejected() {
+  expectVerifierFailure("cross_adt_upcast.mlir", "is not a subtype of");
+}
+
+// Each definition must be self-contained when printed, including recursive bodies.
+void testADTRecursiveRoundtrip() {
+  mlir::MLIRContext ctx;
+  loadDialects(ctx);
+  auto lines = readDataLines("adt_recursive.mlir");
+  REQUIRE(lines.size() == 3);
+  for (const auto &line : lines) {
+    auto type = mlir::parseType(line, &ctx);
+    REQUIRE(type != nullptr);
+    auto adt = llvm::dyn_cast<mlir::qtt::ADTType>(type);
+    REQUIRE(adt != nullptr);
+    REQUIRE(adt.isInitialized());
+    std::string printed = printType(type);
+    mlir::MLIRContext fresh;
+    loadDialects(fresh);
+    auto reparsed = mlir::parseType(printed, &fresh);
+    REQUIRE(reparsed != nullptr);
+    EXPECT(printType(reparsed) == printed);
+    auto copy = llvm::dyn_cast<mlir::qtt::ADTType>(reparsed);
+    REQUIRE(copy != nullptr);
+    REQUIRE(copy.isInitialized());
+    if (adt.getQualifiedName().getValue() == "Self") {
+      REQUIRE(copy.getCtors().size() == 1);
+      REQUIRE(copy.getCtors()[0].getPayload().size() == 1);
+      EXPECT(copy.getCtors()[0].getPayload()[0] == copy);
+    } else if (adt.getQualifiedName().getValue() == "A") {
+      REQUIRE(copy.getCtors().size() == 1);
+      REQUIRE(copy.getCtors()[0].getPayload().size() == 1);
+      auto child = llvm::dyn_cast<mlir::qtt::ADTType>(copy.getCtors()[0].getPayload()[0]);
+      REQUIRE(child != nullptr);
+      REQUIRE(child.isInitialized());
+      REQUIRE(child.getCtors().size() == 1);
+      REQUIRE(child.getCtors()[0].getPayload().size() == 1);
+      EXPECT(child.getCtors()[0].getPayload()[0] == copy);
+    } else {
+      EXPECT(copy.getCtors().empty());
+    }
+  }
+}
+
+void testADTDefinitionLifecycle() {
+  mlir::MLIRContext ctx;
+  loadDialects(ctx);
+  auto lines = readDataLines("adt_lifecycle.mlir");
+  REQUIRE(lines.size() == 6);
+  auto reference = mlir::parseType(lines[0], &ctx);
+  REQUIRE(reference != nullptr);
+  auto adt = llvm::dyn_cast<mlir::qtt::ADTType>(reference);
+  REQUIRE(adt != nullptr);
+  EXPECT(!adt.isInitialized());
+  EXPECT(adt.lookupCtor(mlir::StringAttr::get(&ctx, "Lit")) == nullptr);
+  EXPECT(printType(adt) == lines[0]);
+  EXPECT(mlir::parseType(lines[1], &ctx) == reference);
+  REQUIRE(adt.isInitialized());
+  const auto original = printType(adt);
+  EXPECT(mlir::parseType(lines[1], &ctx) == reference);
+  for (size_t i = 2; i < lines.size(); ++i) {
+    DiagnosticCapture diags(ctx);
+    EXPECT(mlir::parseType(lines[i], &ctx) == nullptr);
+    EXPECT(diags.contains("conflicting definition of ADT"));
+    EXPECT(printType(adt) == original);
+  }
+}
+
+void testConstructArityRoundtrip() {
+  mlir::MLIRContext ctx;
+  loadDialects(ctx);
+  auto ir = readDataFile("construct_arities.mlir");
+  if (ir.empty())
+    return;
+  mlir::OwningOpRef<mlir::ModuleOp> mod;
+  REQUIRE(!roundtrip(ctx, mod, ir).empty());
+  unsigned count = 0;
+  mod->walk([&](mlir::qtt::ConstructOp op) {
+    EXPECT(op.getArgs().size() == (count == 0 ? 0 : 2));
+    ++count;
+  });
+  EXPECT(count == 2);
+}
+
+void testConstructWrongResult() {
+  expectVerifierFailure("construct_wrong_result.mlir", "result must be CtorTYpe");
+}
+
+void testConstructTooFewArguments() {
+  expectVerifierFailure("construct_too_few.mlir", "expected 1 constructor arguments, got 0");
+}
+
+void testConstructTooManyArguments() {
+  expectVerifierFailure("construct_too_many.mlir", "expected 1 constructor arguments, got 2");
+}
+
+void testUpcastWrongInput() {
+  expectVerifierFailure("upcast_wrong_input.mlir", "expected variant -> ADT");
+}
+
+void testUpcastWrongResult() {
+  expectVerifierFailure("upcast_wrong_result.mlir", "expected variant -> ADT");
+}
+
+//===----------------------------------------------------------------------===//
+// Constructor payload and ADT body entries.
+//===----------------------------------------------------------------------===//
+
+// Same ADT, same constructor name, different payloads: payload is part of the
+// CtorType identity, so both references coexist and roundtrip independently.
+void testCtorPayloadCoexists() {
+  mlir::MLIRContext ctx;
+  loadDialects(ctx);
+
+  std::vector<std::string> lines = readDataLines("ctor_payload_coexists.mlir");
+  REQUIRE(lines.size() == 3);
+
+  mlir::Type adtType = mlir::parseType(lines[0], &ctx);
+  REQUIRE(adtType != nullptr);
+  auto adt = llvm::dyn_cast<mlir::qtt::ADTType>(adtType);
+  REQUIRE(adt != nullptr);
+
+  mlir::Type i64Ctor = mlir::parseType(lines[1], &ctx);
+  mlir::Type i32Ctor = mlir::parseType(lines[2], &ctx);
+  REQUIRE(i64Ctor != nullptr);
+  REQUIRE(i32Ctor != nullptr);
+  EXPECT(i64Ctor != i32Ctor);
+  EXPECT(printType(i64Ctor) == lines[1]);
+  EXPECT(printType(i32Ctor) == lines[2]);
+
+  // The ADT still resolves its own member, untouched by the extra reference.
+  EXPECT(adt.lookupCtor(mlir::StringAttr::get(&ctx, "Lit")) == i64Ctor);
+}
+
+// ADT body entries must be constructor types belonging to that very ADT.
+void testADTInvalidEntryRejected() {
+  mlir::MLIRContext ctx;
+  loadDialects(ctx);
+  DiagnosticCapture diags(ctx);
+
+  std::vector<std::string> lines = readDataLines("adt_invalid_entry.mlir");
+  REQUIRE(lines.size() == 2);
+
+  EXPECT(mlir::parseType(lines[0], &ctx) == nullptr);
+  EXPECT(diags.contains("expected constructor type in ADT body"));
+
+  EXPECT(mlir::parseType(lines[1], &ctx) == nullptr);
+  EXPECT(diags.contains("does not belong to ADT"));
+}
+
+} // namespace
+
+struct TestCase {
+  const char *name;
+  void (*run)();
+};
+
+int main(int argc, char **argv) {
+  const TestCase tests[] = {
+      {"DialectRegistration", testDialectRegistration},
+      {"ADTTypeRoundtrip", testADTTypeRoundtrip},
+      {"ADTTypeConflictRejected", testADTTypeConflictRejected},
+      {"ADTDuplicateCtorRejected", testADTDuplicateCtorRejected},
+      {"CtorTypeRoundtrip", testCtorTypeRoundtrip},
+      {"CtorOfUndefinedADTAccepted", testCtorOfUndefinedADTAccepted},
+      {"CtorUnknownConstructorRejected", testCtorUnknownConstructorRejected},
+      {"UnknownTypeRejected", testUnknownTypeRejected},
+      {"IsSubType", testIsSubType},
+      {"ConstructUpcastRoundtrip", testConstructUpcastRoundtrip},
+      {"PayloadMismatchRejected", testPayloadMismatchRejected},
+      {"CrossADTUpcastRejected", testCrossADTUpcastRejected},
+      {"ADTRecursiveRoundtrip", testADTRecursiveRoundtrip},
+      {"ADTDefinitionLifecycle", testADTDefinitionLifecycle},
+      {"ConstructArityRoundtrip", testConstructArityRoundtrip},
+      {"ConstructWrongResult", testConstructWrongResult},
+      {"ConstructTooFewArguments", testConstructTooFewArguments},
+      {"ConstructTooManyArguments", testConstructTooManyArguments},
+      {"UpcastWrongInput", testUpcastWrongInput},
+      {"UpcastWrongResult", testUpcastWrongResult},
+      {"CtorPayloadCoexists", testCtorPayloadCoexists},
+      {"ADTInvalidEntryRejected", testADTInvalidEntryRejected},
+  };
+  bool found = false;
+  for (const auto &test : tests) {
+    if (argc > 1 && std::string(argv[1]) != test.name)
+      continue;
+    found = true;
+    qtt_test::currentTest = test.name;
+    int before = qtt_test::failures;
+    test.run();
+    std::printf("[%s] %s\n", before == qtt_test::failures ? "PASS" : "FAIL", test.name);
+  }
+  if (!found) {
+    std::fprintf(stderr, "Unknown test: %s\n", argv[1]);
+    return 1;
+  }
+  return qtt_test::failures == 0 ? 0 : 1;
+}

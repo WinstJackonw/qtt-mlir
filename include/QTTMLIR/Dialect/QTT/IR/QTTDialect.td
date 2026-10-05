@@ -9,7 +9,7 @@ def QTT_Dialect : Dialect{
 
   let description = [{ TODO }];
 
-  let cppNamespace = "::qtt";
+  let cppNamespace = "::mlir::qtt";
   let useDefaultTypePrinterParser = true;
   // let useDefaultAttributePrinterParser = true;
 }
