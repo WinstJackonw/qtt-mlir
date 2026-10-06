@@ -22,6 +22,7 @@ foreach(test_case
   UnknownTypeRejected
   IsSubType
   ConstructUpcastRoundtrip
+  UnpackRoundtrip
   CasePrettyPrint
   CaseIncompleteADTRejected
   PayloadMismatchRejected

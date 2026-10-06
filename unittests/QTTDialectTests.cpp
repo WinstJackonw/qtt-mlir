@@ -257,6 +257,27 @@ void testConstructUpcastRoundtrip() {
   EXPECT(mod->lookupSymbol<mlir::func::FuncOp>("make") != nullptr);
 }
 
+void testUnpackRoundtrip() {
+  mlir::MLIRContext ctx;
+  loadDialects(ctx);
+
+  mlir::OwningOpRef<mlir::ModuleOp> mod;
+  REQUIRE(!roundtrip(ctx, mod, readDataFile("unpack_roundtrip.mlir")).empty());
+
+  unsigned count = 0;
+  mod->walk([&](mlir::qtt::UnpackOp op) {
+    if (count == 0) {
+      EXPECT(op.getArgs().empty());
+    } else {
+      REQUIRE(op.getArgs().size() == 2);
+      EXPECT(op.getArgs()[0].getType() == mlir::IntegerType::get(&ctx, 64));
+      EXPECT(op.getArgs()[1].getType() == mlir::IntegerType::get(&ctx, 32));
+    }
+    ++count;
+  });
+  EXPECT(count == 2);
+}
+
 void testCasePrettyPrint() {
   mlir::MLIRContext ctx;
   loadDialects(ctx);
@@ -453,6 +474,7 @@ int main(int argc, char **argv) {
       {"UnknownTypeRejected", testUnknownTypeRejected},
       {"IsSubType", testIsSubType},
       {"ConstructUpcastRoundtrip", testConstructUpcastRoundtrip},
+      {"UnpackRoundtrip", testUnpackRoundtrip},
       {"CasePrettyPrint", testCasePrettyPrint},
       {"CaseIncompleteADTRejected", testCaseIncompleteADTRejected},
       {"PayloadMismatchRejected", testPayloadMismatchRejected},

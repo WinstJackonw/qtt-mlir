@@ -30,6 +30,29 @@ mlir::LogicalResult mlir::qtt::ConstructOp::verify() {
   return mlir::success();
 }
 
+mlir::LogicalResult mlir::qtt::UnpackOp::verify() {
+  auto ctor = llvm::dyn_cast<mlir::qtt::CtorType>(getInput().getType());
+
+  if (!ctor)
+    return emitOpError() << "input must be CtorType";
+
+  llvm::ArrayRef<mlir::Type> expected = ctor.getPayload();
+
+  if (expected.size() != getArgs().size()) {
+    return emitOpError() << "expected " << expected.size() << " constructor payloads, got "
+                         << getArgs().size();
+  }
+
+  for (auto [result, expectedType] : llvm::zip(getArgs(), expected)) {
+    if (result.getType() != expectedType) {
+      return emitOpError() << "constructor payload type mismatch: "
+                           << "expected " << expectedType << ", got " << result.getType();
+    }
+  }
+
+  return mlir::success();
+}
+
 mlir::LogicalResult mlir::qtt::UpcastOp::verify() {
   auto source = llvm::dyn_cast<CtorType>(getInput().getType());
 
