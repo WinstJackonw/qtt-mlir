@@ -35,4 +35,25 @@ def QTT_UpcastOp : QTT_Op<"upcast", [Pure]> {
   let hasVerifier = 1;
 }
 
+def QTT_CastOp : QTT_Op<"cast", [Pure]>{
+  let arguments = (ins AnyType:$input);
+
+  let results = (outs AnyType:$result);
+
+  let assemblyFormat = "$input attr-dict `:` "
+  "type($input) `to` type($result)";
+
+  let hasVerifier = 1;
+}
+
+def QTT_CaseOp : QTT_Op<"case", []>{
+  let arguments = (ins QTT_ADTType:$input);
+
+  let regions = (region
+    VariadicRegion<AnyRegion>:$cases);
+
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+}
+
 #endif

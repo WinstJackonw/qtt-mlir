@@ -1,5 +1,6 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/Support/LLVM.h"
+#include <QTTMLIR/Dialect/QTT/IR/QTTTypes.h>
 
 #include "QTTMLIR/Dialect/QTT/IR/QTTOps.h"
 
@@ -41,4 +42,79 @@ mlir::LogicalResult mlir::qtt::UpcastOp::verify() {
     return emitOpError() << source << " is not a subtype of " << target;
 
   return mlir::success();
+}
+
+mlir::LogicalResult mlir::qtt::CastOp::verify() {
+  Type from = getInput().getType();
+  Type to = getResult().getType();
+
+  if (isSubType(from, to))
+    return success();
+
+  if (isSubType(to, from))
+    return success();
+
+  return emitOpError() << "types are unrelated: " << from << " and " << to;
+}
+
+mlir::LogicalResult mlir::qtt::CaseOp::verify() {
+  ADTType adt = getInput().getType();
+
+  if (!adt.isInitialized())
+    return emitOpError("input ADT must be fully defined");
+
+  llvm::DenseSet<Type> expected;
+  llvm::DenseSet<Type> actual;
+
+  for (const auto &def : adt.getCtors()) {
+    expected.insert(mlir::qtt::CtorType::get(adt, def.getName(), def.getPayload()));
+  }
+
+  for (Region &region : getCases()) {
+    if (!llvm::hasSingleElement(region))
+      return emitOpError("each case region must contain one entry block");
+
+    Block &block = region.front();
+
+    if (block.getNumArguments() != 1)
+      return emitOpError("each case region must have exactly one variant argument");
+
+    Type argType = block.getArgument(0).getType();
+
+    auto variant = dyn_cast<CtorType>(argType);
+
+    if (!variant)
+      return emitOpError("case argument must have qtt.variant type");
+
+    if (variant.getParent() != adt)
+      return emitOpError("case variant belongs to another ADT");
+
+    if (!actual.insert(variant).second)
+      return emitOpError("duplicate variant case");
+  }
+
+  if (actual != expected)
+    return emitOpError("case is not exhaustive");
+
+  return success();
+}
+
+mlir::ParseResult mlir::qtt::CaseOp::parse(mlir::OpAsmParser &parser,
+                                           mlir::OperationState &result) {
+  return parser.parseGenericOperationAfterOpName(result);
+}
+
+void mlir::qtt::CaseOp::print(mlir::OpAsmPrinter &printer) {
+  printer << ' ' << getInput() << " : " << getInput().getType() << " {";
+  for (Region &region : getCases()) {
+    Block &block = region.front();
+    auto ctor = llvm::cast<CtorType>(block.getArgument(0).getType());
+
+    printer << " !" << ctor.getName().getValue() << '(';
+    printer.printRegionArgument(block.getArgument(0), {}, /*omitType=*/true);
+    printer << ") ";
+    printer.printRegion(region, /*printEntryBlockArgs=*/false);
+  }
+  printer << " }";
+  printer.printOptionalAttrDict((*this)->getAttrs());
 }

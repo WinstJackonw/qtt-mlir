@@ -9,7 +9,8 @@ class QTT_Type<string name, string Mnemonic, list<Trait> traits = []>  : TypeDef
 }
 
 def QTT_ADTType : QTT_Type<"ADT", "adt", [MutableType]> {
-  let parameters = (ins "::mlir::StringAttr":$qualifiedName);
+  let parameters = (ins "::mlir::StringAttr":$qualifiedName,
+      "::llvm::ArrayRef<::mlir::Type>":$typeArguments);
 
   let genStorageClass = 0;
   let storageClass = "ADTTypeStorage";
@@ -18,6 +19,10 @@ def QTT_ADTType : QTT_Type<"ADT", "adt", [MutableType]> {
   let hasCustomAssemblyFormat = 1;
 
   let extraClassDeclaration = [{
+    static ADTType get(::mlir::MLIRContext *context, ::mlir::StringAttr qualifiedName) {
+      return get(context, qualifiedName, {});
+    }
+
     bool isInitialized() const;
 
     ::llvm::ArrayRef<::mlir::qtt::CtorType>

@@ -27,9 +27,36 @@ struct DefiningScope {
 
   mlir::qtt::ADTType previous;
 };
+// Optional arguments follow the ADT name in both ADT and constructor types.
+mlir::ParseResult parseTypeArguments(mlir::AsmParser &parser,
+                                     llvm::SmallVectorImpl<mlir::Type> &arguments) {
+  if (failed(parser.parseOptionalLParen()))
+    return mlir::success();
+  if (succeeded(parser.parseOptionalRParen()))
+    return mlir::success();
+  do {
+    mlir::Type argument;
+    if (failed(parser.parseType(argument)))
+      return mlir::failure();
+    arguments.push_back(argument);
+  } while (succeeded(parser.parseOptionalComma()));
+  return parser.parseRParen();
+}
+
+void printTypeArguments(mlir::AsmPrinter &printer, llvm::ArrayRef<mlir::Type> arguments) {
+  if (arguments.empty())
+    return;
+  printer << '(';
+  llvm::interleaveComma(arguments, printer, [&](mlir::Type type) { printer.printType(type); });
+  printer << ')';
+}
 } // namespace
 
 mlir::StringAttr mlir::qtt::ADTType::getQualifiedName() const { return getImpl()->qualifiedName_; }
+
+llvm::ArrayRef<mlir::Type> mlir::qtt::ADTType::getTypeArguments() const {
+  return getImpl()->typeArguments_;
+}
 
 bool mlir::qtt::ADTType::isInitialized() const { return getImpl()->initialized_; }
 
@@ -69,9 +96,9 @@ mlir::LogicalResult mlir::qtt::ADTType::setBody(llvm::ArrayRef<mlir::qtt::CtorTy
 // Grammar:
 //
 //   adt-type ::=
-//       `adt` `<` string `>`
+//       `adt` `<` string (`(` type-list? `)`)? `>`
 //
-//     | `adt` `<` string `,` `[`
+//     | `adt` `<` string (`(` type-list? `)`)? `,` `[`
 //           ctor-type (`,` ctor-type)*
 //       `]` `>`
 //
@@ -92,16 +119,20 @@ mlir::Type mlir::qtt::ADTType::parse(mlir::AsmParser &parser) {
   if (failed(parser.parseString(&qualifiedName)))
     return {};
 
+  llvm::SmallVector<Type, 2> typeArguments;
+  if (failed(parseTypeArguments(parser, typeArguments)))
+    return {};
+
   mlir::StringAttr nameAttr = parser.getBuilder().getStringAttr(qualifiedName);
 
   // IMPORTANT:
   //
   // Create the identified type before parsing the body.
   //
-  // Therefore recursive references to the same qualified name
+  // Therefore recursive references to the same qualified name and arguments
   // resolve to this exact TypeStorage, and constructors stored in
   // the body can point back at this (possibly still incomplete) ADT.
-  ADTType result = ADTType::get(parser.getContext(), nameAttr);
+  ADTType result = ADTType::get(parser.getContext(), nameAttr, typeArguments);
 
   // Short recursive/reference form:
   //
@@ -182,6 +213,7 @@ mlir::Type mlir::qtt::ADTType::parse(mlir::AsmParser &parser) {
 void mlir::qtt::ADTType::print(mlir::AsmPrinter &printer) const {
   printer << '<';
   printer.printString(getQualifiedName().getValue());
+  printTypeArguments(printer, getTypeArguments());
 
   // Recursive printer guard.
   //
@@ -230,7 +262,7 @@ mlir::qtt::CtorType mlir::qtt::CtorType::get(::mlir::qtt::ADTType parent, mlir::
 //
 // Grammar:
 //
-//   ctor-type ::= `ctor` `<` string `,` string `(` type-list? `)` `>`
+//   ctor-type ::= `ctor` `<` string (`(` type-list? `)`)? `,` string `(` type-list? `)` `>`
 //
 // Examples:
 //
@@ -249,6 +281,10 @@ mlir::Type mlir::qtt::CtorType::parse(mlir::AsmParser &parser) {
 
   std::string parentName;
   if (failed(parser.parseString(&parentName)))
+    return {};
+
+  llvm::SmallVector<Type, 2> typeArguments;
+  if (failed(parseTypeArguments(parser, typeArguments)))
     return {};
 
   if (failed(parser.parseComma()))
@@ -289,7 +325,7 @@ mlir::Type mlir::qtt::CtorType::parse(mlir::AsmParser &parser) {
 
   mlir::StringAttr parentNameAttr = parser.getBuilder().getStringAttr(parentName);
 
-  ADTType parent = ADTType::get(parser.getContext(), parentNameAttr);
+  ADTType parent = ADTType::get(parser.getContext(), parentNameAttr, typeArguments);
 
   mlir::StringAttr ctorAttr = parser.getBuilder().getStringAttr(ctorName);
 
@@ -310,6 +346,7 @@ void mlir::qtt::CtorType::print(mlir::AsmPrinter &printer) const {
   //
   // otherwise the entire ADT definition gets expanded here.
   printer.printString(getParent().getQualifiedName().getValue());
+  printTypeArguments(printer, getParent().getTypeArguments());
 
   printer << ", ";
 

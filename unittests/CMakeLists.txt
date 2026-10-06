@@ -12,6 +12,8 @@ target_compile_definitions(QTTDialectTests PRIVATE
 foreach(test_case
   DialectRegistration
   ADTTypeRoundtrip
+  ADTTypeArguments
+  ParameterizedConstructUpcast
   ADTTypeConflictRejected
   ADTDuplicateCtorRejected
   CtorTypeRoundtrip
@@ -20,6 +22,8 @@ foreach(test_case
   UnknownTypeRejected
   IsSubType
   ConstructUpcastRoundtrip
+  CasePrettyPrint
+  CaseIncompleteADTRejected
   PayloadMismatchRejected
   CrossADTUpcastRejected
   ADTRecursiveRoundtrip

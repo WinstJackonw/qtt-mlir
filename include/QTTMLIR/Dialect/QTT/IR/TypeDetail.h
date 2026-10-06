@@ -13,18 +13,25 @@
 
 namespace mlir::qtt::details {
 struct ADTTypeStorage : public mlir::TypeStorage {
-  using KeyTy = mlir::StringAttr;
+  using KeyTy = std::tuple<mlir::StringAttr, llvm::ArrayRef<mlir::Type>>;
 
-  explicit ADTTypeStorage(mlir::StringAttr qualifiedName) : qualifiedName_(qualifiedName) {}
+  ADTTypeStorage(mlir::StringAttr qualifiedName, llvm::ArrayRef<mlir::Type> typeArguments)
+      : qualifiedName_(qualifiedName), typeArguments_(typeArguments) {}
 
-  bool operator==(const KeyTy &key) const { return qualifiedName_ == key; }
+  bool operator==(const KeyTy &key) const {
+    return qualifiedName_ == std::get<0>(key) && typeArguments_ == std::get<1>(key);
+  }
 
-  static llvm::hash_code hashKey(const KeyTy &key) { return llvm::hash_value(key); }
+  static llvm::hash_code hashKey(const KeyTy &key) {
+    return llvm::hash_combine(std::get<0>(key), llvm::hash_combine_range(std::get<1>(key).begin(),
+                                                                         std::get<1>(key).end()));
+  }
 
-  KeyTy getAsKey() const { return qualifiedName_; }
+  KeyTy getAsKey() const { return KeyTy(qualifiedName_, typeArguments_); }
 
   static ADTTypeStorage *construct(mlir::TypeStorageAllocator &allocator, const KeyTy &key) {
-    return new (allocator.allocate<ADTTypeStorage>()) ADTTypeStorage(key);
+    return new (allocator.allocate<ADTTypeStorage>())
+        ADTTypeStorage(std::get<0>(key), allocator.copyInto(std::get<1>(key)));
   }
 
   mlir::LogicalResult mutate(mlir::TypeStorageAllocator &allocator,
@@ -39,6 +46,7 @@ struct ADTTypeStorage : public mlir::TypeStorage {
 
   // Data
   mlir::StringAttr qualifiedName_;
+  llvm::ArrayRef<mlir::Type> typeArguments_;
   llvm::ArrayRef<CtorType> ctors_;
 
   bool initialized_ = false;

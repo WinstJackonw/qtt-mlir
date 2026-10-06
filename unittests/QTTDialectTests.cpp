@@ -47,6 +47,75 @@ void testADTTypeRoundtrip() {
   EXPECT(again == type);
 }
 
+void testADTTypeArguments() {
+  mlir::MLIRContext ctx;
+  loadDialects(ctx);
+  auto lines = readDataLines("adt_arguments.mlir");
+  REQUIRE(lines.size() == 10);
+  auto reference = mlir::parseType(lines[0], &ctx);
+  REQUIRE(reference);
+  auto adt = llvm::cast<mlir::qtt::ADTType>(reference);
+  REQUIRE(adt.getTypeArguments().size() == 2);
+  EXPECT(adt.getTypeArguments()[0] == mlir::IntegerType::get(&ctx, 64));
+  EXPECT(adt.getTypeArguments()[1] == mlir::Float64Type::get(&ctx));
+  EXPECT(!adt.isInitialized());
+  EXPECT(printType(adt) == lines[0]);
+  // The builder copies arguments into context-owned storage.
+  llvm::SmallVector<mlir::Type> arguments(adt.getTypeArguments());
+  EXPECT(mlir::qtt::ADTType::get(&ctx, adt.getQualifiedName(), arguments) == adt);
+  arguments.clear();
+  EXPECT(mlir::parseType(lines[1], &ctx) == adt);
+  EXPECT(mlir::parseType(lines[1], &ctx) == adt);
+  REQUIRE(adt.isInitialized());
+  auto other = mlir::parseType(lines[2], &ctx);
+  REQUIRE(other);
+  EXPECT(other != adt);
+  auto ctorType = mlir::parseType(lines[3], &ctx);
+  REQUIRE(ctorType);
+  auto ctor = llvm::cast<mlir::qtt::CtorType>(ctorType);
+  EXPECT(ctor.getParent() == adt);
+  EXPECT(adt.lookupCtor(mlir::StringAttr::get(&ctx, "Left")) == ctor);
+  EXPECT(mlir::qtt::isSubType(ctor, adt));
+  EXPECT(!mlir::qtt::isSubType(ctor, other));
+  for (unsigned i : {4u, 5u}) {
+    auto distinct = mlir::parseType(lines[i], &ctx);
+    REQUIRE(distinct);
+    EXPECT(distinct != adt);
+    EXPECT(!mlir::qtt::isSubType(ctor, distinct));
+  }
+  EXPECT(mlir::qtt::ADTType::get(&ctx, adt.getQualifiedName()).getTypeArguments().empty());
+  {
+    DiagnosticCapture diags(ctx);
+    EXPECT(!mlir::parseType(lines[6], &ctx));
+    EXPECT(diags.contains("does not belong to ADT"));
+    EXPECT(!mlir::parseType(lines[7], &ctx));
+    EXPECT(diags.contains("conflicting definition of ADT"));
+    EXPECT(printType(adt) == lines[1]);
+  }
+  for (unsigned i : {1u, 2u, 3u, 8u, 9u}) {
+    auto type = mlir::parseType(lines[i], &ctx);
+    REQUIRE(type);
+    auto printed = printType(type);
+    mlir::MLIRContext fresh;
+    loadDialects(fresh);
+    auto copy = mlir::parseType(printed, &fresh);
+    REQUIRE(copy);
+    EXPECT(printType(copy) == printed);
+    if (i == 8) {
+      auto list = llvm::cast<mlir::qtt::ADTType>(copy);
+      EXPECT(list.getCtors()[0].getPayload()[1] == list);
+    }
+  }
+}
+
+void testParameterizedConstructUpcast() {
+  mlir::MLIRContext ctx;
+  loadDialects(ctx);
+  mlir::OwningOpRef<mlir::ModuleOp> mod;
+  REQUIRE(!roundtrip(ctx, mod, readDataFile("parameterized_construct_upcast.mlir")).empty());
+  expectVerifierFailure("cross_arguments_upcast.mlir", "is not a subtype of");
+}
+
 void testADTTypeConflictRejected() {
   mlir::MLIRContext ctx;
   loadDialects(ctx);
@@ -186,6 +255,27 @@ void testConstructUpcastRoundtrip() {
   EXPECT(printed.find("!qtt.ctor<\"expr\", \"Lit\"(i64)>") != std::string::npos);
   EXPECT(printed.find("!qtt.adt<\"expr\"") != std::string::npos);
   EXPECT(mod->lookupSymbol<mlir::func::FuncOp>("make") != nullptr);
+}
+
+void testCasePrettyPrint() {
+  mlir::MLIRContext ctx;
+  loadDialects(ctx);
+
+  auto mod = mlir::parseSourceString<mlir::ModuleOp>(
+      readDataFile("case_roundtrip.mlir"), mlir::ParserConfig(&ctx, /*verifyAfterParse=*/false));
+  REQUIRE(mod.get() != nullptr);
+
+  std::string printed;
+  llvm::raw_string_ostream os(printed);
+  mod->print(os, mlir::OpPrintingFlags().assumeVerified());
+  os.flush();
+  EXPECT(printed.find("!Lit(") != std::string::npos);
+  EXPECT(printed.find("!Nil(") != std::string::npos);
+  EXPECT(printed.find("^bb") == std::string::npos);
+}
+
+void testCaseIncompleteADTRejected() {
+  expectVerifierFailure("case_incomplete_adt.mlir", "input ADT must be fully defined");
 }
 
 void testPayloadMismatchRejected() {
@@ -353,6 +443,8 @@ int main(int argc, char **argv) {
   const TestCase tests[] = {
       {"DialectRegistration", testDialectRegistration},
       {"ADTTypeRoundtrip", testADTTypeRoundtrip},
+      {"ADTTypeArguments", testADTTypeArguments},
+      {"ParameterizedConstructUpcast", testParameterizedConstructUpcast},
       {"ADTTypeConflictRejected", testADTTypeConflictRejected},
       {"ADTDuplicateCtorRejected", testADTDuplicateCtorRejected},
       {"CtorTypeRoundtrip", testCtorTypeRoundtrip},
@@ -361,6 +453,8 @@ int main(int argc, char **argv) {
       {"UnknownTypeRejected", testUnknownTypeRejected},
       {"IsSubType", testIsSubType},
       {"ConstructUpcastRoundtrip", testConstructUpcastRoundtrip},
+      {"CasePrettyPrint", testCasePrettyPrint},
+      {"CaseIncompleteADTRejected", testCaseIncompleteADTRejected},
       {"PayloadMismatchRejected", testPayloadMismatchRejected},
       {"CrossADTUpcastRejected", testCrossADTUpcastRejected},
       {"ADTRecursiveRoundtrip", testADTRecursiveRoundtrip},
