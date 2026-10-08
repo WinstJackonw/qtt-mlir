@@ -2,6 +2,8 @@
 add_executable(QTTDialectTests QTTDialectTests.cpp)
 target_link_libraries(QTTDialectTests PRIVATE
   QTTMLIRQTTIR
+  QTTMLIRQREPIR
+  QTTMLIRQTTToQREP
   MLIRParser
   MLIRFuncDialect
 )
@@ -11,6 +13,7 @@ target_compile_definitions(QTTDialectTests PRIVATE
 # Keep each behavior independently selectable and visible in CTest output.
 foreach(test_case
   DialectRegistration
+  QREPRegistration
   ADTTypeRoundtrip
   ADTTypeArguments
   ParameterizedConstructUpcast

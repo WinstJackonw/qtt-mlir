@@ -1,4 +1,8 @@
 // QTT dialect behavior tests; textual inputs live in data/.
+#include "QTTMLIR/Conversion/QTTToQREP/QTTToQREP.h"
+
+#include "mlir/Pass/PassManager.h"
+
 #include "TestSupport.h"
 
 namespace {
@@ -13,6 +17,14 @@ void testDialectRegistration() {
   loadDialects(ctx);
   EXPECT(ctx.getLoadedDialect<mlir::qtt::QTTDialect>() != nullptr);
   EXPECT(ctx.getLoadedDialect("qtt") != nullptr);
+}
+
+void testQREPRegistration() {
+  mlir::MLIRContext ctx;
+  loadDialects(ctx);
+  loadQREP(ctx);
+  EXPECT(ctx.getLoadedDialect<mlir::qrep::QREPDialect>() != nullptr);
+  EXPECT(ctx.getLoadedDialect("qrep") != nullptr);
 }
 
 //===----------------------------------------------------------------------===//
@@ -463,6 +475,7 @@ struct TestCase {
 int main(int argc, char **argv) {
   const TestCase tests[] = {
       {"DialectRegistration", testDialectRegistration},
+      {"QREPRegistration", testQREPRegistration},
       {"ADTTypeRoundtrip", testADTTypeRoundtrip},
       {"ADTTypeArguments", testADTTypeArguments},
       {"ParameterizedConstructUpcast", testParameterizedConstructUpcast},

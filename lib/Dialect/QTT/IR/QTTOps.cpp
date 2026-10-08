@@ -81,7 +81,10 @@ mlir::LogicalResult mlir::qtt::CastOp::verify() {
 }
 
 mlir::LogicalResult mlir::qtt::CaseOp::verify() {
-  ADTType adt = getInput().getType();
+  auto adt = llvm::dyn_cast<ADTType>(getInput().getType());
+
+  if (!adt)
+    return emitOpError("input must be ADTType");
 
   if (!adt.isInitialized())
     return emitOpError("input ADT must be fully defined");

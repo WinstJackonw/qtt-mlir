@@ -18,6 +18,9 @@
 #include "mlir/Support/LLVM.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include "QTTMLIR/Dialect/QREP/IR/QREPDialect.h"
+#include "QTTMLIR/Dialect/QREP/IR/QREPOps.h"
+#include "QTTMLIR/Dialect/QREP/IR/QREPTypes.h"
 #include "QTTMLIR/Dialect/QTT/IR/QTTDialect.h"
 #include "QTTMLIR/Dialect/QTT/IR/QTTOps.h"
 #include "QTTMLIR/Dialect/QTT/IR/QTTTypes.h"
@@ -115,6 +118,8 @@ inline void loadDialects(mlir::MLIRContext &ctx) {
   ctx.loadDialect<mlir::qtt::QTTDialect>();
   ctx.getOrLoadDialect<mlir::func::FuncDialect>();
 }
+
+inline void loadQREP(mlir::MLIRContext &ctx) { ctx.loadDialect<mlir::qrep::QREPDialect>(); }
 
 inline std::string printOp(mlir::Operation *op) {
   std::string printed;

@@ -25,7 +25,9 @@ def QTT_ConstructOp : QTT_Op<"construct", [Pure]> {
 }
 
 def QTT_UnpackOp : QTT_Op<"unpack", [Pure]> {
-  let arguments = (ins QTT_CtorType:$input);
+  // Keep the operand constraint open for dialect conversion.  The verifier
+  // still enforces that the value is a constructor at the QTT level.
+  let arguments = (ins AnyType:$input);
 
   let results = (outs Variadic<AnyType>:$args);
 
@@ -58,7 +60,9 @@ def QTT_CastOp : QTT_Op<"cast", [Pure]> {
 }
 
 def QTT_CaseOp : QTT_Op<"case", []> {
-  let arguments = (ins QTT_ADTType:$input);
+  // The verifier enforces ADT-ness; AnyType lets QTT values be remapped to
+  // QREP values without an illegal source-type materialization.
+  let arguments = (ins AnyType:$input);
 
   let regions = (region VariadicRegion<AnyRegion>:$cases);
 
