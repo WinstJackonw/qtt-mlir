@@ -27,6 +27,12 @@ foreach(test_case
   ConstructUpcastRoundtrip
   UnpackRoundtrip
   CasePrettyPrint
+  CaseResultsRoundtrip
+  YieldWrongCount
+  YieldWrongType
+  YieldWrongParent
+  CaseMissingYield
+  CaseBranchValidation
   CaseIncompleteADTRejected
   PayloadMismatchRejected
   CrossADTUpcastRejected

@@ -60,13 +60,34 @@ def QTT_CastOp : QTT_Op<"cast", [Pure]> {
 }
 
 def QTT_CaseOp : QTT_Op<"case", []> {
+  let summary = "Exhaustive ADT match with explicitly yielded results";
+  let description = [{
+    Each constructor has one single-block region with one constructor-typed
+    argument and an explicit qtt.yield terminator. Yielded values must match
+    the case result types. Custom assembly uses constructor names (quoted
+    when necessary), for example:
+
+    %r = qtt.case %input : !qtt.adt<"choice"> -> (i64) {
+      A(%a) { qtt.yield %value : i64 }
+      B(%b) { qtt.yield %value : i64 }
+    }
+  }];
   // The verifier enforces ADT-ness; AnyType lets QTT values be remapped to
   // QREP values without an illegal source-type materialization.
   let arguments = (ins AnyType:$input);
 
+  let results = (outs Variadic<AnyType>:$results);
+
   let regions = (region VariadicRegion<AnyRegion>:$cases);
 
   let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+}
+
+// Explicitly returns values from a single case branch.
+def QTT_YieldOp : QTT_Op<"yield", [Terminator, HasParent<"CaseOp">, Pure]> {
+  let arguments = (ins Variadic<AnyType>:$values);
+  let assemblyFormat = "attr-dict ($values^ `:` type($values))?";
   let hasVerifier = 1;
 }
 

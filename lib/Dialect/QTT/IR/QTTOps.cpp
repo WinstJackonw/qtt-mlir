@@ -102,6 +102,9 @@ mlir::LogicalResult mlir::qtt::CaseOp::verify() {
 
     Block &block = region.front();
 
+    if (block.empty() || !isa<YieldOp>(block.back()))
+      return emitOpError("each case region must end with qtt.yield");
+
     if (block.getNumArguments() != 1)
       return emitOpError("each case region must have exactly one variant argument");
 
@@ -125,18 +128,64 @@ mlir::LogicalResult mlir::qtt::CaseOp::verify() {
   return success();
 }
 
+mlir::LogicalResult mlir::qtt::YieldOp::verify() {
+  auto parent = dyn_cast_or_null<CaseOp>((*this)->getParentOp());
+  if (!parent)
+    return emitOpError("must be directly nested in qtt.case");
+  if (getNumOperands() != parent.getNumResults())
+    return emitOpError("operand count must match case result count");
+  for (auto [value, result] : llvm::zip(getValues(), parent.getResults())) {
+    if (value.getType() != result.getType())
+      return emitOpError("operand type must match case result type: expected ")
+             << result.getType() << ", got " << value.getType();
+  }
+  return success();
+}
+
 mlir::ParseResult mlir::qtt::CaseOp::parse(mlir::OpAsmParser &parser,
                                            mlir::OperationState &result) {
-  return parser.parseGenericOperationAfterOpName(result);
+  OpAsmParser::UnresolvedOperand input;
+  Type inputType;
+  if (parser.parseOperand(input) || parser.parseColonType(inputType) ||
+      parser.resolveOperand(input, inputType, result.operands) ||
+      parser.parseOptionalArrowTypeList(result.types))
+    return failure();
+  auto adt = dyn_cast<ADTType>(inputType);
+  if (!adt || !adt.isInitialized())
+    return parser.emitError(parser.getCurrentLocation(), "expected a fully defined ADT input type");
+  if (parser.parseLBrace())
+    return failure();
+  while (failed(parser.parseOptionalRBrace())) {
+    std::string name;
+    OpAsmParser::Argument argument;
+    if (parser.parseKeywordOrString(&name) || parser.parseLParen() ||
+        parser.parseArgument(argument) || parser.parseRParen())
+      return failure();
+    auto ctor = adt.lookupCtor(StringAttr::get(parser.getContext(), name));
+    if (!ctor)
+      return parser.emitError(parser.getCurrentLocation(), "unknown case constructor: ") << name;
+    argument.type = ctor;
+    if (parser.parseRegion(*result.addRegion(), argument))
+      return failure();
+  }
+  return parser.parseOptionalAttrDict(result.attributes);
 }
 
 void mlir::qtt::CaseOp::print(mlir::OpAsmPrinter &printer) {
-  printer << ' ' << getInput() << " : " << getInput().getType() << " {";
+  printer << ' ' << getInput() << " : " << getInput().getType();
+  if (getNumResults()) {
+    printer << " -> (";
+    llvm::interleaveComma(getResultTypes(), printer);
+    printer << ')';
+  }
+  printer << " {";
   for (Region &region : getCases()) {
     Block &block = region.front();
     auto ctor = llvm::cast<CtorType>(block.getArgument(0).getType());
 
-    printer << " !" << ctor.getName().getValue() << '(';
+    printer << ' ';
+    printer.printKeywordOrString(ctor.getName().getValue());
+    printer << '(';
     printer.printRegionArgument(block.getArgument(0), {}, /*omitType=*/true);
     printer << ") ";
     printer.printRegion(region, /*printEntryBlockArgs=*/false);

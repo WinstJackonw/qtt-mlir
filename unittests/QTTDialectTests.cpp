@@ -294,17 +294,84 @@ void testCasePrettyPrint() {
   mlir::MLIRContext ctx;
   loadDialects(ctx);
 
-  auto mod = mlir::parseSourceString<mlir::ModuleOp>(
-      readDataFile("case_roundtrip.mlir"), mlir::ParserConfig(&ctx, /*verifyAfterParse=*/false));
-  REQUIRE(mod.get() != nullptr);
-
-  std::string printed;
-  llvm::raw_string_ostream os(printed);
-  mod->print(os, mlir::OpPrintingFlags().assumeVerified());
-  os.flush();
-  EXPECT(printed.find("!Lit(") != std::string::npos);
-  EXPECT(printed.find("!Nil(") != std::string::npos);
+  mlir::OwningOpRef<mlir::ModuleOp> mod;
+  std::string printed = roundtrip(ctx, mod, readDataFile("case_roundtrip.mlir"));
+  REQUIRE(!printed.empty());
+  EXPECT(printed.find("Lit(") != std::string::npos);
+  EXPECT(printed.find("Nil(") != std::string::npos);
   EXPECT(printed.find("^bb") == std::string::npos);
+}
+
+void testCaseResultsRoundtrip() {
+  mlir::MLIRContext ctx;
+  loadDialects(ctx);
+  mlir::OwningOpRef<mlir::ModuleOp> mod;
+  auto printed = roundtrip(ctx, mod, readDataFile("case_results.mlir"));
+  REQUIRE(!printed.empty());
+  EXPECT(printed.find("marker = \"kept\"") != std::string::npos);
+  EXPECT(printed.find("nested = true") != std::string::npos);
+  unsigned cases = 0;
+  mod->walk([&](mlir::qtt::CaseOp op) {
+    EXPECT(op.getNumResults() == 1 || op.getNumResults() == 2);
+    ++cases;
+  });
+  EXPECT(cases == 2);
+  std::string generic;
+  llvm::raw_string_ostream os(generic);
+  mod->print(os, mlir::OpPrintingFlags().printGenericOpForm());
+  os.flush();
+  mlir::OwningOpRef<mlir::ModuleOp> copy;
+  EXPECT(!roundtrip(ctx, copy, generic).empty());
+}
+
+void testYieldWrongCount() {
+  expectVerifierFailure("yield_wrong_count.mlir", "operand count must match case result count");
+}
+void testYieldWrongType() {
+  expectVerifierFailure("yield_wrong_type.mlir", "operand type must match case result type");
+}
+void testYieldWrongParent() {
+  expectVerifierFailure("yield_wrong_parent.mlir", "qtt.case");
+}
+void testCaseMissingYield() {
+  expectVerifierFailure("case_missing_yield.mlir", "each case region must end with qtt.yield");
+}
+
+void testCaseBranchValidation() {
+  const std::string prefix = R"mlir(module {
+    func.func private @adt() -> !qtt.adt<"choice", [!qtt.ctor<"choice", "A"()>, !qtt.ctor<"choice", "B"()>]>
+    func.func private @other() -> !qtt.adt<"other", [!qtt.ctor<"other", "C"()>]>
+    func.func @bad(%input: !qtt.adt<"choice">) {
+      "qtt.case"(%input) (
+  )mlir";
+  const std::string suffix = R"mlir() : (!qtt.adt<"choice">) -> ()
+      return
+    }
+  })mlir";
+  const std::pair<const char *, const char *> cases[] = {
+      {R"mlir({^bb0(%a: !qtt.ctor<"choice", "A"()>): qtt.yield})mlir",
+       "case is not exhaustive"},
+      {R"mlir({^bb0(%a: !qtt.ctor<"choice", "A"()>): qtt.yield},
+              {^bb0(%b: !qtt.ctor<"choice", "A"()>): qtt.yield})mlir",
+       "duplicate variant case"},
+      {R"mlir({^bb0(%a: !qtt.ctor<"other", "C"()>): qtt.yield})mlir",
+       "case variant belongs to another ADT"},
+      {R"mlir({^bb0(%a: i64): qtt.yield})mlir",
+       "case argument must have qtt.variant type"},
+      {R"mlir({qtt.yield})mlir", "exactly one variant argument"},
+      {R"mlir({^bb0(%a: !qtt.ctor<"choice", "A"()>): return})mlir",
+       "each case region must end with qtt.yield"},
+  };
+  for (auto [regions, message] : cases) {
+    mlir::MLIRContext ctx;
+    loadDialects(ctx);
+    DiagnosticCapture diagnostics(ctx);
+    auto mod = mlir::parseSourceString<mlir::ModuleOp>(
+        prefix + regions + suffix, mlir::ParserConfig(&ctx, false));
+    REQUIRE(mod);
+    EXPECT(failed(mlir::verify(*mod)));
+    EXPECT(diagnostics.contains(message));
+  }
 }
 
 void testCaseIncompleteADTRejected() {
@@ -489,6 +556,12 @@ int main(int argc, char **argv) {
       {"ConstructUpcastRoundtrip", testConstructUpcastRoundtrip},
       {"UnpackRoundtrip", testUnpackRoundtrip},
       {"CasePrettyPrint", testCasePrettyPrint},
+      {"CaseResultsRoundtrip", testCaseResultsRoundtrip},
+      {"YieldWrongCount", testYieldWrongCount},
+      {"YieldWrongType", testYieldWrongType},
+      {"YieldWrongParent", testYieldWrongParent},
+      {"CaseMissingYield", testCaseMissingYield},
+      {"CaseBranchValidation", testCaseBranchValidation},
       {"CaseIncompleteADTRejected", testCaseIncompleteADTRejected},
       {"PayloadMismatchRejected", testPayloadMismatchRejected},
       {"CrossADTUpcastRejected", testCrossADTUpcastRejected},
