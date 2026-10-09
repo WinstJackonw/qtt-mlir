@@ -2,11 +2,67 @@
 #include "QTTMLIR/Conversion/QTTToQREP/QTTToQREP.h"
 
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Transforms/Passes.h"
 
 #include "TestSupport.h"
 
 namespace {
 using namespace qtt_test;
+
+void testADTCanonicalization() {
+  mlir::MLIRContext ctx;
+  loadDialects(ctx);
+  auto mod = mlir::parseSourceString<mlir::ModuleOp>(readDataFile("adt_canonicalization.mlir"), &ctx);
+  REQUIRE(mod);
+  mlir::PassManager pm(&ctx);
+  pm.addPass(mlir::createCanonicalizerPass());
+  REQUIRE(succeeded(pm.run(*mod)));
+  REQUIRE(succeeded(mlir::verify(*mod)));
+  auto count = [](mlir::func::FuncOp func, llvm::StringRef name) {
+    unsigned result = 0;
+    func.walk([&](mlir::Operation *op) { result += op->getName().getStringRef() == name; });
+    return result;
+  };
+  for (auto name : {"unpack_construct", "reconstruct", "identity", "upcast_back", "cast_back",
+                    "parameterized", "recursive"}) {
+    auto func = mod->lookupSymbol<mlir::func::FuncOp>(name);
+    REQUIRE(func);
+    EXPECT(count(func, "qtt.construct") == 0);
+    EXPECT(count(func, "qtt.unpack") == 0);
+    EXPECT(count(func, "qtt.cast") == 0);
+    EXPECT(count(func, "qtt.upcast") == 0);
+    EXPECT(count(func, "qtt.case") == 0);
+    auto ret = llvm::cast<mlir::func::ReturnOp>(func.getBody().front().getTerminator());
+    EXPECT(ret.getOperand(0) == func.getArgument(0));
+  }
+  for (auto name : {"known", "known_cast", "nullary"}) {
+    auto func = mod->lookupSymbol<mlir::func::FuncOp>(name);
+    REQUIRE(func);
+    EXPECT(count(func, "qtt.case") == 0);
+    EXPECT(count(func, "qtt.yield") == 0);
+    EXPECT(count(func, "qtt.unpack") == 0);
+    llvm::SmallVector<mlir::func::CallOp> calls;
+    func.walk([&](mlir::func::CallOp call) { calls.push_back(call); });
+    REQUIRE(calls.size() == 2);
+    EXPECT(calls[0].getCallee() == "first");
+    EXPECT(calls[1].getCallee() == "second");
+    if (llvm::StringRef(name) != "nullary") {
+      auto ret = llvm::cast<mlir::func::ReturnOp>(func.getBody().front().getTerminator());
+      REQUIRE(ret.getNumOperands() == 2);
+      EXPECT(ret.getOperand(0) == func.getArgument(0));
+      EXPECT(ret.getOperand(1) == func.getArgument(1));
+    }
+  }
+  EXPECT(count(mod->lookupSymbol<mlir::func::FuncOp>("unknown"), "qtt.case") == 1);
+  EXPECT(count(mod->lookupSymbol<mlir::func::FuncOp>("reordered"), "qtt.construct") == 1);
+  EXPECT(count(mod->lookupSymbol<mlir::func::FuncOp>("rebuild_other"), "qtt.construct") == 1);
+  EXPECT(count(mod->lookupSymbol<mlir::func::FuncOp>("partial"), "qtt.construct") == 1);
+  EXPECT(count(mod->lookupSymbol<mlir::func::FuncOp>("narrow_widen"), "qtt.cast") == 1);
+  EXPECT(count(mod->lookupSymbol<mlir::func::FuncOp>("different_ctor"), "qtt.cast") == 1);
+  std::string printed = printOp(*mod);
+  REQUIRE(succeeded(pm.run(*mod)));
+  EXPECT(printOp(*mod) == printed);
+}
 
 //===----------------------------------------------------------------------===//
 // Dialect registration.
@@ -541,6 +597,7 @@ struct TestCase {
 
 int main(int argc, char **argv) {
   const TestCase tests[] = {
+      {"ADTCanonicalization", testADTCanonicalization},
       {"DialectRegistration", testDialectRegistration},
       {"QREPRegistration", testQREPRegistration},
       {"ADTTypeRoundtrip", testADTTypeRoundtrip},

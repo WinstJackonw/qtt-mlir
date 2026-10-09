@@ -14,6 +14,7 @@ class QTT_Op<string mnemonic, list<Trait> traits = []>
 }
 
 def QTT_ConstructOp : QTT_Op<"construct", [Pure]> {
+  let hasCanonicalizer = 1;
   let arguments = (ins Variadic<AnyType>:$args);
 
   let results = (outs AnyType:$res);
@@ -25,6 +26,7 @@ def QTT_ConstructOp : QTT_Op<"construct", [Pure]> {
 }
 
 def QTT_UnpackOp : QTT_Op<"unpack", [Pure]> {
+  let hasCanonicalizer = 1;
   // Keep the operand constraint open for dialect conversion.  The verifier
   // still enforces that the value is a constructor at the QTT level.
   let arguments = (ins AnyType:$input);
@@ -49,6 +51,7 @@ def QTT_UpcastOp : QTT_Op<"upcast", [Pure]> {
 }
 
 def QTT_CastOp : QTT_Op<"cast", [Pure]> {
+  let hasCanonicalizer = 1;
   let arguments = (ins AnyType:$input);
 
   let results = (outs AnyType:$result);
@@ -60,6 +63,7 @@ def QTT_CastOp : QTT_Op<"cast", [Pure]> {
 }
 
 def QTT_CaseOp : QTT_Op<"case", []> {
+  let hasCanonicalizer = 1;
   let summary = "Exhaustive ADT match with explicitly yielded results";
   let description = [{
     Each constructor has one single-block region with one constructor-typed

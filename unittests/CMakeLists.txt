@@ -6,6 +6,7 @@ target_link_libraries(QTTDialectTests PRIVATE
   QTTMLIRQTTToQREP
   MLIRParser
   MLIRFuncDialect
+  MLIRTransforms
 )
 target_compile_definitions(QTTDialectTests PRIVATE
   "QTT_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
@@ -13,6 +14,7 @@ target_compile_definitions(QTTDialectTests PRIVATE
 # Keep each behavior independently selectable and visible in CTest output.
 foreach(test_case
   DialectRegistration
+  ADTCanonicalization
   QREPRegistration
   ADTTypeRoundtrip
   ADTTypeArguments

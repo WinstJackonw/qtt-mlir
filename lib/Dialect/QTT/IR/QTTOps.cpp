@@ -1,4 +1,5 @@
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LLVM.h"
 #include <QTTMLIR/Dialect/QTT/IR/QTTTypes.h>
 
@@ -6,6 +7,109 @@
 
 #define GET_OP_CLASSES
 #include "QTTMLIR/Dialect/QTT/IR/QTTOps.cpp.inc"
+
+namespace {
+using namespace mlir;
+using namespace mlir::qtt;
+
+// Only look through a widening conversion. In particular, never cancel an
+// ADT -> constructor -> ADT chain, which could hide a failing narrowing cast.
+Value getWidenedConstructor(Value value) {
+  Value input;
+  if (auto upcast = value.getDefiningOp<UpcastOp>())
+    input = upcast.getInput();
+  else if (auto cast = value.getDefiningOp<CastOp>())
+    input = cast.getInput();
+  if (!input)
+    return {};
+  auto ctor = dyn_cast<CtorType>(input.getType());
+  if (!ctor || ctor.getParent() != value.getType())
+    return {};
+  return input;
+}
+
+struct UnpackConstruct : OpRewritePattern<UnpackOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(UnpackOp op, PatternRewriter &rewriter) const override {
+    auto construct = op.getInput().getDefiningOp<ConstructOp>();
+    if (!construct)
+      return failure();
+    rewriter.replaceOp(op, construct.getArgs());
+    return success();
+  }
+};
+
+struct Reconstruct : OpRewritePattern<ConstructOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(ConstructOp op, PatternRewriter &rewriter) const override {
+    // A nullary construction provides no source value to reconstruct.
+    if (op.getArgs().empty())
+      return failure();
+    auto unpack = op.getArgs().front().getDefiningOp<UnpackOp>();
+    if (!unpack || unpack.getInput().getType() != op.getResult().getType() ||
+        op.getArgs().size() != unpack.getNumResults())
+      return failure();
+    for (auto [argument, result] : llvm::zip(op.getArgs(), unpack.getResults()))
+      if (argument != result)
+        return failure();
+    rewriter.replaceOp(op, unpack.getInput());
+    return success();
+  }
+};
+
+struct SimplifyCast : OpRewritePattern<CastOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(CastOp op, PatternRewriter &rewriter) const override {
+    if (op.getInput().getType() == op.getResult().getType()) {
+      rewriter.replaceOp(op, op.getInput());
+      return success();
+    }
+    Value ctor = getWidenedConstructor(op.getInput());
+    if (!ctor || ctor.getType() != op.getResult().getType())
+      return failure();
+    rewriter.replaceOp(op, ctor);
+    return success();
+  }
+};
+
+struct SelectKnownCase : OpRewritePattern<CaseOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(CaseOp op, PatternRewriter &rewriter) const override {
+    Value ctor = getWidenedConstructor(op.getInput());
+    if (!ctor)
+      return failure();
+    for (Region &region : op.getCases()) {
+      Block &block = region.front();
+      if (block.getArgument(0).getType() != ctor.getType())
+        continue;
+      auto yield = cast<YieldOp>(block.getTerminator());
+      rewriter.inlineBlockBefore(&block, op, ValueRange{ctor});
+      SmallVector<Value> results(yield.getValues());
+      rewriter.eraseOp(yield);
+      rewriter.replaceOp(op, results);
+      return success();
+    }
+    return failure();
+  }
+};
+} // namespace
+
+void mlir::qtt::ConstructOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                                       MLIRContext *context) {
+  patterns.add<Reconstruct>(context);
+}
+void mlir::qtt::UnpackOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                                    MLIRContext *context) {
+  patterns.add<UnpackConstruct>(context);
+}
+void mlir::qtt::CastOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                                  MLIRContext *context) {
+  patterns.add<SimplifyCast>(context);
+}
+void mlir::qtt::CaseOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                                  MLIRContext *context) {
+  patterns.add<SelectKnownCase>(context);
+}
 
 mlir::LogicalResult mlir::qtt::ConstructOp::verify() {
   auto ctor = llvm::dyn_cast<mlir::qtt::CtorType>(getResult().getType());
