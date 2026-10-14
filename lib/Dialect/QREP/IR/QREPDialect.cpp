@@ -16,8 +16,6 @@ void QREPDialect::initialize() {
 #include "QTTMLIR/Dialect/QREP/IR/QREPOps.cpp.inc"
       >();
 
-  addTypes<
-#define GET_TYPEDEF_LIST
-#include "QTTMLIR/Dialect/QREP/IR/QREPOpsTypes.cpp.inc"
-      >();
+  initializeAttributes();
+  initializeTypes();
 }

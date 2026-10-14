@@ -1,6 +1,7 @@
 add_mlir_dialect_library(QTTMLIRQREPIR
   QREPDialect.cpp
   QREPOps.cpp
+  QREPAttrs.cpp
   QREPTypes.cpp
 
   ADDITIONAL_HEADER_DIRS
@@ -8,8 +9,11 @@ add_mlir_dialect_library(QTTMLIRQREPIR
 
   DEPENDS
     MLIRQREPOpsIncGen
+    MLIRQREPAttrsIncGen
 
   LINK_LIBS PUBLIC
+    QTTMLIRQTTIR
     MLIRIR
+    MLIRControlFlowInterfaces
     MLIRSupport
 )

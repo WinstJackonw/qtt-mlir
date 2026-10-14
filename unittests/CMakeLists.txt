@@ -51,3 +51,10 @@ foreach(test_case
 )
   add_test(NAME QTT.${test_case} COMMAND QTTDialectTests ${test_case})
 endforeach()
+
+add_executable(QREPTests QREPTests.cpp)
+target_link_libraries(QREPTests PRIVATE
+  QTTMLIRQTTToQREP MLIRParser MLIRArithDialect MLIRSCFDialect MLIRControlFlowDialect)
+target_compile_definitions(QREPTests PRIVATE
+  "QTT_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
+add_test(NAME QREP.Nat COMMAND QREPTests)

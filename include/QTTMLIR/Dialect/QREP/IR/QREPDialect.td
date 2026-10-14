@@ -7,12 +7,16 @@ def QREP_Dialect : Dialect {
   let name = "qrep";
   let summary = "an explicit, LLVM-friendly representation of QTT values";
   let description = [{
-    QREP is the lowering boundary between QTT's algebraic data type
-    operations and LLVM.  Aggregate values are represented as opaque
-    references, while constructor and case metadata remains explicit on the
-    operations for the later runtime/LLVM lowering.
+    QREP makes the storage and primitive operations of QTT values explicit.
+    Named layouts own storage choices and implementation regions.
   }];
+  let extraClassDeclaration = [{
+    void initializeAttributes();
+    void initializeTypes();
+  }];
+  let dependentDialects = ["::mlir::qtt::QTTDialect"];
   let cppNamespace = "::mlir::qrep";
+  let useDefaultAttributePrinterParser = 1;
   let useDefaultTypePrinterParser = false;
 }
 

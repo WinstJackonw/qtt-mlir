@@ -4,6 +4,11 @@ add_mlir_conversion_library(QTTMLIRQTTToQREP
   LINK_LIBS PUBLIC
     QTTMLIRQTTIR
     QTTMLIRQREPIR
+    MLIRArithDialect
+    MLIRControlFlowDialect
+    MLIRSCFDialect
+    MLIRSCFTransforms
+    MLIRFuncTransforms
     MLIRFuncDialect
     MLIRIR
     MLIRPass
