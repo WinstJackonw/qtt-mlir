@@ -8,6 +8,8 @@
 
 namespace mlir {
 namespace qtt {
+/// Usage annotation for a binding or constructor field.
+enum class Multiplicity { Zero, One, Omega };
 namespace details {
 struct ADTTypeStorage;
 struct CtorTypeStorage;

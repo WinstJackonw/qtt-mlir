@@ -250,10 +250,32 @@ mlir::StringAttr mlir::qtt::CtorType::getName() const { return getImpl()->name; 
 llvm::ArrayRef<mlir::Type> mlir::qtt::CtorType::getPayload() const { return getImpl()->payload; }
 
 mlir::qtt::CtorType mlir::qtt::CtorType::get(::mlir::qtt::ADTType parent, mlir::StringAttr name,
-                                             llvm::ArrayRef<mlir::Type> payload) {
+                                             llvm::ArrayRef<mlir::Type> payload,
+                                             llvm::ArrayRef<Multiplicity> fieldMultiplicities) {
   assert(parent && "parent should be valid");
 
-  return Base::get(parent.getContext(), parent, name, payload);
+  llvm::SmallVector<Multiplicity> defaults;
+  if (fieldMultiplicities.empty()) {
+    defaults.assign(payload.size(), Multiplicity::Omega);
+    fieldMultiplicities = defaults;
+  }
+  assert(fieldMultiplicities.size() == payload.size() && "one multiplicity per field required");
+  assert(llvm::all_of(fieldMultiplicities,
+                      [](Multiplicity value) {
+                        return value == Multiplicity::Zero || value == Multiplicity::One ||
+                               value == Multiplicity::Omega;
+                      }) &&
+         "invalid field multiplicity");
+  return Base::get(parent.getContext(), parent, name, payload, fieldMultiplicities);
+}
+
+llvm::ArrayRef<mlir::qtt::Multiplicity> mlir::qtt::CtorType::getFieldMultiplicities() const {
+  return getImpl()->fieldMultiplicities;
+}
+
+mlir::qtt::Multiplicity mlir::qtt::CtorType::getFieldMultiplicity(unsigned index) const {
+  assert(index < getPayload().size());
+  return getFieldMultiplicities()[index];
 }
 
 //===----------------------------------------------------------------------===//
@@ -262,7 +284,8 @@ mlir::qtt::CtorType mlir::qtt::CtorType::get(::mlir::qtt::ADTType parent, mlir::
 //
 // Grammar:
 //
-//   ctor-type ::= `ctor` `<` string (`(` type-list? `)`)? `,` string `(` type-list? `)` `>`
+//   ctor-type ::= `ctor` `<` string (`(` type-list? `)`)? `,` string `(` field-list? `)` `>`
+//   field ::= type (`{` `qtt.multiplicity` `=` string `}`)?
 //
 // Examples:
 //
@@ -298,6 +321,7 @@ mlir::Type mlir::qtt::CtorType::parse(mlir::AsmParser &parser) {
     return {};
 
   llvm::SmallVector<Type, 2> payload;
+  llvm::SmallVector<Multiplicity, 2> multiplicities;
 
   // Empty payload:
   //
@@ -310,7 +334,29 @@ mlir::Type mlir::qtt::CtorType::parse(mlir::AsmParser &parser) {
       if (failed(parser.parseType(fieldType)))
         return {};
 
+      NamedAttrList attrs;
+      if (failed(parser.parseOptionalAttrDict(attrs)))
+        return {};
+      Multiplicity multiplicity = Multiplicity::Omega;
+      for (NamedAttribute attr : attrs) {
+        if (attr.getName() != "qtt.multiplicity") {
+          parser.emitError(parser.getCurrentLocation(), "unsupported constructor field attribute");
+          return {};
+        }
+        auto value = dyn_cast<StringAttr>(attr.getValue());
+        if (!value ||
+            (value.getValue() != "0" && value.getValue() != "1" && value.getValue() != "omega")) {
+          parser.emitError(parser.getCurrentLocation(),
+                           "field qtt.multiplicity must be one of \"0\", \"1\", or \"omega\"");
+          return {};
+        }
+        if (value.getValue() == "0")
+          multiplicity = Multiplicity::Zero;
+        else if (value.getValue() == "1")
+          multiplicity = Multiplicity::One;
+      }
       payload.push_back(fieldType);
+      multiplicities.push_back(multiplicity);
 
       if (succeeded(parser.parseOptionalRParen()))
         break;
@@ -336,7 +382,7 @@ mlir::Type mlir::qtt::CtorType::parse(mlir::AsmParser &parser) {
     return {};
   }
 
-  return CtorType::get(parent, ctorAttr, payload);
+  return CtorType::get(parent, ctorAttr, payload, multiplicities);
 }
 
 void mlir::qtt::CtorType::print(mlir::AsmPrinter &printer) const {
@@ -354,8 +400,13 @@ void mlir::qtt::CtorType::print(mlir::AsmPrinter &printer) const {
 
   printer << '(';
 
-  llvm::interleaveComma(getPayload(), printer,
-                        [&](Type fieldType) { printer.printType(fieldType); });
+  llvm::interleaveComma(llvm::enumerate(getPayload()), printer, [&](auto field) {
+    printer.printType(field.value());
+    auto multiplicity = getFieldMultiplicity(field.index());
+    if (multiplicity != Multiplicity::Omega)
+      printer << " {qtt.multiplicity = \"" << (multiplicity == Multiplicity::Zero ? "0" : "1")
+              << "\"}";
+  });
 
   printer << ")>";
 }

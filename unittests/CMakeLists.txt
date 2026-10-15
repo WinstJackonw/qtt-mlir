@@ -22,6 +22,8 @@ foreach(test_case
   ParameterizedConstructUpcast
   ADTTypeConflictRejected
   ADTDuplicateCtorRejected
+  CtorMultiplicity
+  CtorMultiplicityInvalid
   CtorTypeRoundtrip
   CtorOfUndefinedADTAccepted
   CtorUnknownConstructorRejected

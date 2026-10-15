@@ -81,6 +81,133 @@ module {
   }
 }
 
+static void testMultiplicities() {
+  MLIRContext ctx;
+  loadDialects(ctx);
+  OwningOpRef<ModuleOp> module;
+  REQUIRE(!roundtrip(ctx, module, R"(
+module {
+  qtt.func @usage : (i64, i64, i64, i64) -> i64 attributes {
+    arg_attrs = [{qtt.multiplicity = "0"}, {qtt.multiplicity = "1"},
+                 {qtt.multiplicity = "omega"}, {}]
+  } {
+    qtt.func_entry default @body(%a: i64 {test.note = "keep"},
+        %b: i64 {qtt.multiplicity = "1"}, %c: i64,
+        %d: i64 {qtt.multiplicity = "omega"}) -> i64 {
+      qtt.return %b : i64
+    }
+  }
+})")
+               .empty());
+  auto function = module->lookupSymbol<qtt::FuncOp>("usage");
+  auto entry = *function.getBody().front().getOps<qtt::FuncEntryOp>().begin();
+  for (auto op : {function.getOperation(), entry.getOperation()}) {
+    auto get = [&](unsigned i) {
+      if (auto f = dyn_cast<qtt::FuncOp>(op))
+        return f.getArgumentMultiplicity(i);
+      return cast<qtt::FuncEntryOp>(op).getArgumentMultiplicity(i);
+    };
+    EXPECT(get(0) == qtt::Multiplicity::Zero);
+    EXPECT(get(1) == qtt::Multiplicity::One);
+    EXPECT(get(2) == qtt::Multiplicity::Omega);
+    EXPECT(get(3) == qtt::Multiplicity::Omega);
+  }
+  std::string generic;
+  llvm::raw_string_ostream out(generic);
+  module->print(out, OpPrintingFlags().printGenericOpForm());
+  EXPECT(parseSourceString<ModuleOp>(generic, &ctx));
+  auto functionAttrs = function.getArgAttrsAttr();
+  auto entryAttrs = entry.getArgAttrsAttr();
+  SmallVector<Attribute> expectedAttrs(entryAttrs.begin(), entryAttrs.end());
+  NamedAttrList first(cast<DictionaryAttr>(expectedAttrs[0]));
+  first.set("qtt.multiplicity", StringAttr::get(&ctx, "0"));
+  expectedAttrs[0] = first.getDictionary(&ctx);
+  expectedAttrs[2] = cast<DictionaryAttr>(functionAttrs[2]);
+  auto loweredAttrs = ArrayAttr::get(&ctx, expectedAttrs);
+  PassManager pm(&ctx);
+  pm.addPass(createQTTFunctionLoweringPass());
+  REQUIRE(succeeded(pm.run(*module)));
+  EXPECT(module->lookupSymbol<func::FuncOp>("usage").getArgAttrsAttr() == functionAttrs);
+  EXPECT(module->lookupSymbol<func::FuncOp>("usage$body").getArgAttrsAttr() == loweredAttrs);
+
+  reject(R"(qtt.func @f : (i64) -> () attributes {
+    arg_attrs = [{qtt.multiplicity = "many"}]
+  } { qtt.func_entry default @d(%n: i64) { qtt.return } })",
+         "qtt.multiplicity must be");
+  reject(R"(qtt.func @f : (i64) -> () {
+    qtt.func_entry default @d(%n: i64 {qtt.multiplicity = 1 : i64}) { qtt.return }
+  })",
+         "qtt.multiplicity must be");
+  reject(R"(qtt.func @f : (i64) -> () attributes {
+    arg_attrs = [{qtt.multiplicity = "1"}]
+  } { qtt.func_entry default @d(%n: i64 {qtt.multiplicity = "omega"}) { qtt.return } })",
+         "multiplicity must match");
+  reject(R"(qtt.func @f : (!nat) -> () {
+    qtt.func_entry @z(%n: !z {qtt.multiplicity = "0"}) { qtt.return }
+    qtt.func_entry default @d(%n: !nat) { qtt.return }
+  })",
+         "multiplicity must match");
+  reject(R"(qtt.func @f : (i64) -> () attributes {arg_attrs = []} {
+    qtt.func_entry default @d(%n: i64) { qtt.return }
+  })",
+         "arg_attrs count must match");
+
+  reject(R"(qtt.func @add : (i64, i64) -> i64 attributes {
+    arg_attrs = [{qtt.multiplicity = "1"}, {qtt.multiplicity = "invalid"}]
+  } {
+    qtt.func_entry default @body(%lhs: i64 {qtt.multiplicity = "1"},
+        %rhs: i64 {qtt.multiplicity = "invalid"}) -> i64 {
+      %sum = arith.addi %lhs, %rhs : i64
+      qtt.return %sum : i64
+    }
+  })",
+         "qtt.multiplicity must be");
+  reject(R"(qtt.func @add : (i64, i64) -> i64 attributes {
+    arg_attrs = [{qtt.multiplicity = "1"}, {qtt.multiplicity = "1"}]
+  } {
+    qtt.func_entry default @body(%lhs: i64 {qtt.multiplicity = "1"},
+        %rhs: i64 {qtt.multiplicity = "omega"}) -> i64 {
+      %sum = arith.addi %lhs, %rhs : i64
+      qtt.return %sum : i64
+    }
+  })",
+         "multiplicity must match");
+  reject(R"(qtt.func @add : (i64, i64) -> i64 attributes {
+    arg_attrs = [{qtt.multiplicity = "1"}]
+  } {
+    qtt.func_entry default @body(%lhs: i64 {qtt.multiplicity = "1"},
+        %rhs: i64 {qtt.multiplicity = "1"}) -> i64 {
+      %sum = arith.addi %lhs, %rhs : i64
+      qtt.return %sum : i64
+    }
+  })",
+         "arg_attrs count must match");
+}
+
+static void testAddMultiplicity() {
+  MLIRContext ctx;
+  loadDialects(ctx);
+  OwningOpRef<ModuleOp> module;
+  REQUIRE(!roundtrip(ctx, module, readDataFile("functions.mlir")).empty());
+
+  auto add = module->lookupSymbol<qtt::FuncOp>("add");
+  REQUIRE(add);
+  EXPECT(add.getArgumentMultiplicity(0) == qtt::Multiplicity::One);
+  EXPECT(add.getArgumentMultiplicity(1) == qtt::Multiplicity::One);
+
+  auto body = *add.getBody().front().getOps<qtt::FuncEntryOp>().begin();
+  EXPECT(body.getArgumentMultiplicity(0) == qtt::Multiplicity::One);
+  EXPECT(body.getArgumentMultiplicity(1) == qtt::Multiplicity::One);
+
+  auto functionAttrs = add.getArgAttrsAttr();
+  EXPECT(!body.getArgAttrsAttr());
+  PassManager pm(&ctx);
+  pm.addPass(createQTTFunctionLoweringPass());
+  REQUIRE(succeeded(pm.run(*module)));
+  EXPECT(module->lookupSymbol<func::FuncOp>("add").getArgAttrsAttr() == functionAttrs);
+  EXPECT(module->lookupSymbol<func::FuncOp>("add$body").getArgAttrsAttr() == functionAttrs);
+}
+
 static void testInvalidEntries() {
   reject("qtt.func @f : () -> () {}", "requires at least one");
   reject(R"(qtt.func @f : () -> () {
@@ -227,8 +354,9 @@ static void testLowering() {
   auto loweredUnit = module->lookupSymbol<func::FuncOp>("unit$fallback");
   REQUIRE(loweredUnit);
   SmallVector<func::CallOp> unitCalls;
-  module->lookupSymbol<func::FuncOp>("unit_resolve").walk(
-      [&](func::CallOp call) { unitCalls.push_back(call); });
+  module->lookupSymbol<func::FuncOp>("unit_resolve").walk([&](func::CallOp call) {
+    unitCalls.push_back(call);
+  });
   EXPECT(unitCalls.size() == 1);
   for (func::CallOp call : unitCalls) {
     EXPECT(call.getCallee() == "unit$fallback");
@@ -299,6 +427,8 @@ static void testLowering() {
 int main() {
   currentTest = "Functions";
   testRoundtrip();
+  testMultiplicities();
+  testAddMultiplicity();
   testInvalidEntries();
   testInvalidCalls();
   testLowering();

@@ -26,8 +26,10 @@ def QTT_FuncOp : QTT_Op<"func", [Symbol, SymbolTable, CallableOpInterface, Isola
                        OptionalAttr<DictArrayAttr>:$res_attrs);
   let regions = (region SizedRegion<1>:$body);
   let assemblyFormat = "$sym_name `:` $function_type attr-dict-with-keyword $body";
+  let hasVerifier = 1;
   let hasRegionVerifier = 1;
   let extraClassDeclaration = [{
+    ::mlir::qtt::Multiplicity getArgumentMultiplicity(unsigned index);
     // The container is not executable SSA code. Lowering materializes its
     // dispatch body; generic inliners must not inline the entry definitions.
     ::mlir::Region *getCallableRegion() { return nullptr; }
@@ -53,6 +55,7 @@ def QTT_FuncEntryOp : QTT_Op<"func_entry", [FunctionOpInterface,
   let hasCustomAssemblyFormat = 1;
   let hasVerifier = 1;
   let extraClassDeclaration = [{
+    ::mlir::qtt::Multiplicity getArgumentMultiplicity(unsigned index);
     ::mlir::Region *getCallableRegion() { return &getBody(); }
     ::llvm::ArrayRef<::mlir::Type> getArgumentTypes() {
       return getFunctionType().getInputs();

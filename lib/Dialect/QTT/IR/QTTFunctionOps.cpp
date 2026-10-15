@@ -6,6 +6,39 @@ using namespace mlir;
 using namespace mlir::qtt;
 
 namespace {
+constexpr StringLiteral multiplicityName = "qtt.multiplicity";
+
+Multiplicity argumentMultiplicity(ArrayAttr attrs, unsigned index) {
+  if (attrs) {
+    auto value = cast<DictionaryAttr>(attrs[index]).getAs<StringAttr>(multiplicityName);
+    if (value && value.getValue() == "0")
+      return Multiplicity::Zero;
+    if (value && value.getValue() == "1")
+      return Multiplicity::One;
+  }
+  return Multiplicity::Omega;
+}
+
+LogicalResult verifyMultiplicities(Operation *op, FunctionType type, ArrayAttr attrs) {
+  if (!attrs)
+    return success();
+  if (attrs.size() != type.getNumInputs())
+    return op->emitOpError("arg_attrs count must match input count");
+  for (auto [index, attr] : llvm::enumerate(attrs)) {
+    auto dict = dyn_cast<DictionaryAttr>(attr);
+    if (!dict)
+      return op->emitOpError("arg_attrs must contain dictionaries");
+    auto value = dict.get(multiplicityName);
+    if (!value)
+      continue;
+    auto text = dyn_cast<StringAttr>(value);
+    if (!text || (text.getValue() != "0" && text.getValue() != "1" && text.getValue() != "omega"))
+      return op->emitOpError("argument ")
+             << index << " qtt.multiplicity must be one of \"0\", \"1\", or \"omega\"";
+  }
+  return success();
+}
+
 // Entries form a private naming scope. Calls to functions (and qualified entry
 // calls) are resolved in the containing function's enclosing symbol scope.
 Operation *resolveCall(Operation *call, SymbolRefAttr ref, bool entry,
@@ -63,6 +96,23 @@ LogicalResult verifyCall(Operation *call, FunctionType type) {
 }
 } // namespace
 
+Multiplicity qtt::FuncOp::getArgumentMultiplicity(unsigned index) {
+  assert(index < getFunctionType().getNumInputs());
+  return argumentMultiplicity(getArgAttrsAttr(), index);
+}
+
+Multiplicity FuncEntryOp::getArgumentMultiplicity(unsigned index) {
+  assert(index < getFunctionType().getNumInputs());
+  auto attrs = getArgAttrsAttr();
+  if (attrs && cast<DictionaryAttr>(attrs[index]).contains(multiplicityName))
+    return argumentMultiplicity(attrs, index);
+  return cast<qtt::FuncOp>((*this)->getParentOp()).getArgumentMultiplicity(index);
+}
+
+LogicalResult qtt::FuncOp::verify() {
+  return verifyMultiplicities(*this, getFunctionType(), getArgAttrsAttr());
+}
+
 LogicalResult qtt::FuncOp::verifyRegions() {
   Block &body = getBody().front();
   if (body.getNumArguments())
@@ -102,6 +152,12 @@ LogicalResult FuncEntryOp::verify() {
     return emitOpError("input count must match parent function");
   if (type.getResults() != base.getResults())
     return emitOpError("result types must match parent function");
+  if (failed(verifyMultiplicities(*this, type, getArgAttrsAttr())))
+    return failure();
+  // Parent operation verification precedes entry verification.
+  for (unsigned i = 0; i < type.getNumInputs(); ++i)
+    if (getArgumentMultiplicity(i) != parent.getArgumentMultiplicity(i))
+      return emitOpError("argument ") << i << " multiplicity must match parent function";
   if (getIsDefault()) {
     if (type != base)
       return emitOpError("default entry must have the full parent function signature");
@@ -145,7 +201,8 @@ void FuncEntryOp::print(OpAsmPrinter &printer) {
   printer.printSymbolName(getSymName());
   function_interface_impl::printFunctionSignature(printer, *this, getArgumentTypes(), false,
                                                   getResultTypes());
-  function_interface_impl::printFunctionAttributes(printer, *this, {"is_default", "function_type"});
+  function_interface_impl::printFunctionAttributes(
+      printer, *this, {"is_default", "function_type", "arg_attrs", "res_attrs"});
   printer << ' ';
   printer.printRegion(getBody(), false, true);
 }

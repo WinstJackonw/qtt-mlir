@@ -126,6 +126,15 @@ LogicalResult mlir::lowerQTTFunctions(ModuleOp module) {
       target.setPrivate();
       if (auto attrs = entry.getArgAttrsAttr())
         target.setArgAttrsAttr(attrs);
+      // Entries inherit omitted multiplicities. Materialize them before the
+      // implementation is detached from its parent signature.
+      if (auto attrs = function.getArgAttrsAttr()) {
+        for (auto [i, attr] : llvm::enumerate(attrs)) {
+          auto multiplicity = cast<DictionaryAttr>(attr).get("qtt.multiplicity");
+          if (multiplicity && !target.getArgAttr(i, "qtt.multiplicity"))
+            target.setArgAttr(i, "qtt.multiplicity", multiplicity);
+        }
+      }
       if (auto attrs = entry.getResAttrsAttr())
         target.setResAttrsAttr(attrs);
       symbols.insert(target);

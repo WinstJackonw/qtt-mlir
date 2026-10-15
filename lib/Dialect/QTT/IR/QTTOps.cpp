@@ -197,7 +197,7 @@ mlir::LogicalResult mlir::qtt::CaseOp::verify() {
   llvm::DenseSet<Type> actual;
 
   for (const auto &def : adt.getCtors()) {
-    expected.insert(mlir::qtt::CtorType::get(adt, def.getName(), def.getPayload()));
+    expected.insert(def);
   }
 
   for (Region &region : getCases()) {

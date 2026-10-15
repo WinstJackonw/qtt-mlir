@@ -53,34 +53,35 @@ struct ADTTypeStorage : public mlir::TypeStorage {
 };
 
 struct CtorTypeStorage : public mlir::TypeStorage {
-  using KeyTy = std::tuple<ADTType, mlir::StringAttr, llvm::ArrayRef<mlir::Type>>;
+  using KeyTy = std::tuple<ADTType, mlir::StringAttr, llvm::ArrayRef<mlir::Type>,
+                           llvm::ArrayRef<Multiplicity>>;
 
-  CtorTypeStorage(ADTType parent, mlir::StringAttr name, llvm::ArrayRef<mlir::Type> payload)
-      : parent(std::move(parent)), name(std::move(name)), payload(std::move(payload)) {}
+  CtorTypeStorage(ADTType parent, mlir::StringAttr name, llvm::ArrayRef<mlir::Type> payload,
+                  llvm::ArrayRef<Multiplicity> fieldMultiplicities)
+      : parent(parent), name(name), payload(payload), fieldMultiplicities(fieldMultiplicities) {}
 
-  KeyTy getAsKey() const { return KeyTy(parent, name, payload); }
+  KeyTy getAsKey() const { return KeyTy(parent, name, payload, fieldMultiplicities); }
 
-  bool operator==(const KeyTy &key) const {
-    return parent == std::get<0>(key) && name == std::get<1>(key) && payload == std::get<2>(key);
-  }
+  bool operator==(const KeyTy &key) const { return getAsKey() == key; }
 
   static llvm::hash_code hashKey(const KeyTy &key) {
-    return llvm::hash_combine(
+    auto hash = llvm::hash_combine(
         std::get<0>(key), std::get<1>(key),
         llvm::hash_combine_range(std::get<2>(key).begin(), std::get<2>(key).end()));
+    for (Multiplicity value : std::get<3>(key))
+      hash = llvm::hash_combine(hash, static_cast<unsigned>(value));
+    return hash;
   }
 
-  static CtorTypeStorage *construct(mlir::TypeStorageAllocator &allocator, KeyTy &&key) {
-    ADTType parent = std::move(std::get<0>(key));
-    mlir::StringAttr name = std::move(std::get<1>(key));
-    llvm::ArrayRef<mlir::Type> payload = std::move(std::get<2>(key));
+  static CtorTypeStorage *construct(mlir::TypeStorageAllocator &allocator, const KeyTy &key) {
     return new (allocator.allocate<CtorTypeStorage>())
-        CtorTypeStorage(std::move(parent), std::move(name), allocator.copyInto(payload));
+        CtorTypeStorage(std::get<0>(key), std::get<1>(key), allocator.copyInto(std::get<2>(key)),
+                        allocator.copyInto(std::get<3>(key)));
   }
 
-  // Data
   ADTType parent;
   mlir::StringAttr name;
   llvm::ArrayRef<mlir::Type> payload;
+  llvm::ArrayRef<Multiplicity> fieldMultiplicities;
 };
 } // namespace mlir::qtt::details

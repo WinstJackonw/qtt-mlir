@@ -588,6 +588,82 @@ void testADTInvalidEntryRejected() {
   EXPECT(diags.contains("does not belong to ADT"));
 }
 
+void testCtorMultiplicity() {
+  using namespace mlir;
+  using namespace mlir::qtt;
+  MLIRContext ctx;
+  loadDialects(ctx);
+  auto parseCtor = [&](StringRef text) {
+    return dyn_cast_or_null<CtorType>(parseType(text, &ctx));
+  };
+  auto plain = parseCtor(R"(!qtt.ctor<"Field", "Mk"(i64)>)");
+  auto omega = parseCtor(R"(!qtt.ctor<"Field", "Mk"(i64 {qtt.multiplicity = "omega"})>)");
+  auto linear = parseCtor(R"(!qtt.ctor<"Field", "Mk"(i64 {qtt.multiplicity = "1"})>)");
+  auto erased = parseCtor(R"(!qtt.ctor<"Field", "Mk"(i64 {qtt.multiplicity = "0"})>)");
+  REQUIRE(plain && omega && linear && erased);
+  EXPECT(plain == omega);
+  EXPECT(plain != linear && plain != erased && linear != erased);
+  EXPECT(plain.getFieldMultiplicity(0) == Multiplicity::Omega);
+  EXPECT(linear.getFieldMultiplicity(0) == Multiplicity::One);
+  EXPECT(erased.getFieldMultiplicity(0) == Multiplicity::Zero);
+  EXPECT(CtorType::get(plain.getParent(), plain.getName(), plain.getPayload()) == plain);
+  EXPECT(CtorType::get(linear.getParent(), linear.getName(), linear.getPayload(),
+                       {Multiplicity::One}) == linear);
+  for (auto ctor : {plain, omega, linear, erased}) {
+    MLIRContext fresh;
+    loadDialects(fresh);
+    auto copy = parseType(printType(ctor), &fresh);
+    REQUIRE(copy);
+    EXPECT(printType(copy) == printType(ctor));
+  }
+  auto recursive = parseType(R"(!qtt.adt<"LinearList", [!qtt.ctor<"LinearList", "Cons"(
+      i64 {qtt.multiplicity = "1"}, !qtt.adt<"LinearList"> {qtt.multiplicity = "1"})>]>)",
+                             &ctx);
+  REQUIRE(recursive);
+  MLIRContext fresh;
+  loadDialects(fresh);
+  auto copy = parseType(printType(recursive), &fresh);
+  REQUIRE(copy);
+  EXPECT(printType(copy) == printType(recursive));
+
+  OwningOpRef<ModuleOp> module;
+  REQUIRE(!roundtrip(ctx, module, readDataFile("ctor_multiplicity.mlir")).empty());
+  std::string generic;
+  llvm::raw_string_ostream out(generic);
+  module->print(out, OpPrintingFlags().printGenericOpForm());
+  EXPECT(parseSourceString<ModuleOp>(generic, &ctx));
+  PassManager pm(&ctx);
+  pm.addPass(createQTTFunctionLoweringPass());
+  REQUIRE(succeeded(pm.run(*module)));
+  unsigned cases = 0;
+  module->walk([&](qtt::CaseOp op) {
+    ++cases;
+    auto ctor = cast<CtorType>(op.getCases()[0].front().getArgument(0).getType());
+    EXPECT(ctor.getFieldMultiplicity(0) == Multiplicity::Zero);
+    EXPECT(ctor.getFieldMultiplicity(1) == Multiplicity::One);
+    EXPECT(ctor.getFieldMultiplicity(2) == Multiplicity::Omega);
+  });
+  EXPECT(cases == 2);
+}
+
+void testCtorMultiplicityInvalid() {
+  mlir::MLIRContext ctx;
+  loadDialects(ctx);
+  DiagnosticCapture diags(ctx);
+  for (auto text : {R"(!qtt.ctor<"Invalid", "Mk"(i64 {qtt.multiplicity = "many"})>)",
+                    R"(!qtt.ctor<"Invalid", "Mk"(i64 {qtt.multiplicity = 1 : i64})>)"}) {
+    EXPECT(!mlir::parseType(text, &ctx));
+  }
+  EXPECT(diags.contains("field qtt.multiplicity must be"));
+  EXPECT(!mlir::parseType(R"(!qtt.ctor<"Invalid", "Mk"(i64 {other = "1"})>)", &ctx));
+  EXPECT(diags.contains("unsupported constructor field attribute"));
+  REQUIRE(mlir::parseType(R"(!qtt.adt<"Conflict", [!qtt.ctor<"Conflict", "Mk"(i64)>]>)", &ctx));
+  EXPECT(!mlir::parseType(
+      R"(!qtt.adt<"Conflict", [!qtt.ctor<"Conflict", "Mk"(i64 {qtt.multiplicity = "1"})>]>)",
+      &ctx));
+  EXPECT(diags.contains("conflicting definition"));
+}
+
 } // namespace
 
 struct TestCase {
@@ -606,6 +682,8 @@ int main(int argc, char **argv) {
       {"ADTTypeConflictRejected", testADTTypeConflictRejected},
       {"ADTDuplicateCtorRejected", testADTDuplicateCtorRejected},
       {"CtorTypeRoundtrip", testCtorTypeRoundtrip},
+      {"CtorMultiplicity", testCtorMultiplicity},
+      {"CtorMultiplicityInvalid", testCtorMultiplicityInvalid},
       {"CtorOfUndefinedADTAccepted", testCtorOfUndefinedADTAccepted},
       {"CtorUnknownConstructorRejected", testCtorUnknownConstructorRejected},
       {"UnknownTypeRejected", testUnknownTypeRejected},

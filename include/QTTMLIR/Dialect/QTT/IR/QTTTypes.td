@@ -38,7 +38,8 @@ def QTT_ADTType : QTT_Type<"ADT", "adt", [MutableType]> {
 
 def QTT_CtorType : QTT_Type<"Ctor", "ctor", []> {
   let parameters = (ins "::mlir::qtt::ADTType":$parent, "::mlir::StringAttr":$name,
-      "::llvm::ArrayRef<::mlir::Type>":$payload);
+      "::llvm::ArrayRef<::mlir::Type>":$payload,
+      "::llvm::ArrayRef<::mlir::qtt::Multiplicity>":$fieldMultiplicities);
 
   let genStorageClass = 0;
   let storageClass = "CtorTypeStorage";
@@ -50,7 +51,10 @@ def QTT_CtorType : QTT_Type<"Ctor", "ctor", []> {
     static CtorType
     get(::mlir::qtt::ADTType parent,
         ::mlir::StringAttr name,
-        ::llvm::ArrayRef<::mlir::Type> payload);
+        ::llvm::ArrayRef<::mlir::Type> payload,
+        ::llvm::ArrayRef<::mlir::qtt::Multiplicity> fieldMultiplicities = {});
+
+    ::mlir::qtt::Multiplicity getFieldMultiplicity(unsigned index) const;
   }];
 }
 

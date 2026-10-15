@@ -47,6 +47,15 @@ module {
       qtt.return %r : i64
     }
   }
+  qtt.func @add : (i64, i64) -> i64 attributes {
+    arg_attrs = [{qtt.multiplicity = "1"}, {qtt.multiplicity = "1"}]
+  } {
+    qtt.func_entry default @body(%lhs: i64,
+        %rhs: i64) -> i64 {
+      %sum = arith.addi %lhs, %rhs : i64
+      qtt.return %sum : i64
+    }
+  }
   qtt.func @entry_resolve : (!nat) -> () {
     qtt.func_entry @zero(%n: !z) {
       qtt.return
