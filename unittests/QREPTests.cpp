@@ -24,7 +24,9 @@ static void testImplKinds() {
   auto layout = module->lookupSymbol<qrep::LayoutOp>("nat");
   auto adt = cast<qtt::ADTType>(layout.getAdt());
   for (auto ctor : adt.getCtors())
-    for (ImplKind kind : {ImplKind::Pack, ImplKind::Upcast, ImplKind::Downcast, ImplKind::Unpack}) {
+    for (ImplKind kind : {ImplKind::Pack, ImplKind::Upcast, ImplKind::Downcast,
+                          ImplKind::Unpack, ImplKind::Borrow, ImplKind::Clone,
+                          ImplKind::Drop}) {
       auto impl = qrep::lookupImpl(layout, kind, ctor);
       REQUIRE(impl);
       EXPECT(impl.getKind() == kind);
@@ -101,6 +103,87 @@ static void testImplKinds() {
   EXPECT(diagnostics.contains("ImplKind to be one of:"));
   EXPECT(!parseAttribute("#qrep<method_kind construct>", &ctx));
   EXPECT(diagnostics.contains("unknown attribute"));
+}
+
+static void testOwnershipImpls() {
+  MLIRContext ctx;
+  load(ctx);
+  auto fixture = readDataFile("nat_lowering.mlir");
+  auto module = parseSourceString<ModuleOp>(fixture, &ctx);
+  REQUIRE(module);
+  auto roundtrip = parseSourceString<ModuleOp>(printOp(*module), &ctx);
+  REQUIRE(roundtrip);
+  for (bool constructor : {false, true}) {
+    for (ImplKind kind : {ImplKind::Clone, ImplKind::Drop}) {
+      auto select = [&](ModuleOp source) {
+        auto layout = source.lookupSymbol<qrep::LayoutOp>("nat");
+        auto ctor = constructor ? cast<qtt::ADTType>(layout.getAdt()).getCtors().front()
+                                : qtt::CtorType{};
+        return qrep::lookupImpl(layout, kind, ctor);
+      };
+      auto impl = select(*roundtrip);
+      REQUIRE(impl);
+      EXPECT(impl.getKind() == kind);
+      auto attr = parseAttribute(kind == ImplKind::Clone ? "#qrep<impl_kind clone>"
+                                                       : "#qrep<impl_kind drop>", &ctx);
+      EXPECT(attr == impl.getKindAttr());
+      auto invalid = [&](auto change, StringRef message) {
+        auto copy = parseSourceString<ModuleOp>(fixture, &ctx);
+        REQUIRE(copy);
+        change(select(*copy));
+        DiagnosticCapture diagnostics(ctx);
+        EXPECT(failed(verify(*copy)));
+        EXPECT(diagnostics.contains(message));
+        if (!diagnostics.contains(message))
+          llvm::errs() << "Expected: " << message << "\nReceived: " << diagnostics.getText();
+      };
+      invalid([](qrep::ImplOp op) { op.erase(); },
+              kind == ImplKind::Clone ? "missing clone implementation" : "missing drop implementation");
+      invalid([](qrep::ImplOp op) { op->getBlock()->push_back(op->clone()); },
+              "duplicate primitive implementation");
+      invalid([&](qrep::ImplOp op) {
+        op.getBody().front().getArgument(0).setType(IntegerType::get(&ctx, 32));
+      }, "implementation arguments do not match storage signature");
+      invalid([](qrep::ImplOp op) { op.getBody().front().addArgument(
+                  IntegerType::get(op.getContext(), 32), op.getLoc()); },
+              "implementation arguments do not match storage signature");
+      invalid([&](qrep::ImplOp op) {
+        auto &block = op.getBody().front();
+        auto yield = cast<qrep::YieldOp>(block.back());
+        if (kind == ImplKind::Clone)
+          yield->setOperands(ValueRange{});
+        else
+          yield->setOperands(ValueRange{block.getArgument(0)});
+      }, "implementation yield does not match storage signature");
+      invalid([](qrep::ImplOp op) {
+        auto yield = cast<qrep::YieldOp>(op.getBody().front().back());
+        OpBuilder builder(yield);
+        auto wrong = arith::ConstantIntOp::create(builder, op.getLoc(), 0, 32);
+        yield->setOperands(ValueRange{wrong});
+      }, "implementation yield does not match storage signature");
+      invalid([](qrep::ImplOp op) {
+        op->getBlock()->push_back(op->clone());
+        auto layout = cast<qrep::LayoutOp>(op->getParentOp());
+        op.setConstructor(layout.getAdt());
+      }, "constructor must be a CtorType");
+      invalid([&](qrep::ImplOp op) {
+        op->getBlock()->push_back(op->clone());
+        auto foreign = qtt::ADTType::get(&ctx, StringAttr::get(&ctx, "Foreign"));
+        op.setConstructor(qtt::CtorType::get(foreign, StringAttr::get(&ctx, "Z"), {}));
+      }, "unknown primitive or invalid constructor/storage mapping");
+    }
+  }
+  for (ImplKind kind : {ImplKind::Pack, ImplKind::Upcast, ImplKind::Downcast, ImplKind::Unpack}) {
+    auto copy = parseSourceString<ModuleOp>(fixture, &ctx);
+    REQUIRE(copy);
+    auto layout = copy->lookupSymbol<qrep::LayoutOp>("nat");
+    auto ctor = cast<qtt::ADTType>(layout.getAdt()).getCtors().front();
+    auto impl = qrep::lookupImpl(layout, kind, ctor);
+    impl.removeConstructorAttr();
+    DiagnosticCapture diagnostics(ctx);
+    EXPECT(failed(impl.verify()));
+    EXPECT(diagnostics.contains("unknown primitive or invalid constructor/storage mapping"));
+  }
 }
 
 // Interpret the produced scalar IR so tests cover values above the signed
@@ -268,6 +351,15 @@ static void testLowering(bool custom, bool heterogeneous, bool distinctView = fa
     Value storage = arith::IndexCastUIOp::create(builder, layout.getLoc(), builder.getI64Type(),
                                                  block.getArgument(0));
     block.getArgument(0).replaceAllUsesExcept(storage, storage.getDefiningOp());
+    for (qtt::CtorType ctor : {qtt::CtorType{}, successor}) {
+      for (ImplKind kind : {ImplKind::Clone, ImplKind::Drop}) {
+        auto impl = qrep::lookupImpl(layout, kind, ctor);
+        Block &ownership = impl.getBody().front();
+        ownership.getArgument(0).setType(builder.getIndexType());
+        if (kind == ImplKind::Clone)
+          cast<qrep::YieldOp>(ownership.back())->setOperands(ownership.getArgument(0));
+      }
+    }
   }
   if (custom) {
     // A different, explicitly selected layout stores the predecessor in S.
@@ -338,7 +430,8 @@ static void testLowering(bool custom, bool heterogeneous, bool distinctView = fa
     auto unit = UnrealizedConversionCastOp::create(builder, layout.getLoc(),
                                                    TypeRange{builder.getNoneType()}, ValueRange{});
     qrep::YieldOp::create(builder, layout.getLoc(), unit.getResults());
-    for (ImplKind kind : {ImplKind::Pack, ImplKind::Upcast, ImplKind::Downcast, ImplKind::Unpack}) {
+    for (ImplKind kind : {ImplKind::Pack, ImplKind::Upcast,
+                          ImplKind::Downcast, ImplKind::Unpack, ImplKind::Clone, ImplKind::Drop}) {
       auto impl = qrep::lookupImpl(layout, kind, zero);
       Block &block = impl.getBody().front();
       while (!block.empty())
@@ -352,6 +445,8 @@ static void testLowering(bool custom, bool heterogeneous, bool distinctView = fa
       else if (kind == ImplKind::Upcast)
         values.push_back(arith::ExtUIOp::create(builder, layout.getLoc(), builder.getI64Type(),
                                                 block.getArgument(0)));
+      if (kind == ImplKind::Clone)
+        values.push_back(block.getArgument(0));
       qrep::YieldOp::create(builder, layout.getLoc(), values);
     }
     auto discriminate = qrep::lookupDiscriminate(layout);
@@ -746,6 +841,7 @@ static void testViewContracts() {
 int main() {
   currentTest = "QREPLayout";
   testImplKinds();
+  testOwnershipImpls();
   testLowering(false, false);
   testLowering(true, false);
   testLowering(false, true);

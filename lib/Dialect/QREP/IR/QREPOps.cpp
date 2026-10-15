@@ -78,10 +78,18 @@ DiscriminateOp qrep::lookupDiscriminate(LayoutOp layout) {
 }
 
 static LogicalResult implSignature(LayoutOp layout, ImplKind kind, qtt::CtorType ctor,
-                                   SmallVectorImpl<Type> &inputs, SmallVectorImpl<Type> &results) {
+                                   SmallVectorImpl<Type> &inputs,
+                                   SmallVectorImpl<Type> &results) {
+  bool ownership = kind == ImplKind::Clone || kind == ImplKind::Drop;
   if (kind == ImplKind::Borrow && !ctor) {
     inputs.push_back(layout.getStorage());
     results.push_back(layout.getView());
+    return success();
+  }
+  if (ownership && !ctor) {
+    inputs.push_back(layout.getView());
+    if (kind == ImplKind::Clone)
+      results.push_back(layout.getView());
     return success();
   }
   if (!ctor || ctor.getParent() != layout.getAdt())
@@ -90,8 +98,15 @@ static LogicalResult implSignature(LayoutOp layout, ImplKind kind, qtt::CtorType
   if (adt.lookupCtor(ctor.getName()) != ctor)
     return failure();
   Type storage = layout.getStorageFor(ctor);
-  if (!storage)
+  Type view = layout.getViewFor(ctor);
+  if (!storage || !view)
     return failure();
+  if (ownership) {
+    inputs.push_back(view);
+    if (kind == ImplKind::Clone)
+      results.push_back(view);
+    return success();
+  }
   SmallVector<Type> fields;
   for (Type payload : ctor.getPayload()) {
     Type field =
@@ -101,6 +116,9 @@ static LogicalResult implSignature(LayoutOp layout, ImplKind kind, qtt::CtorType
     fields.push_back(field);
   }
   switch (kind) {
+  case ImplKind::Clone:
+  case ImplKind::Drop:
+    llvm_unreachable("ownership signatures handled above");
   case ImplKind::Pack:
     inputs.append(fields);
     results.push_back(storage);
@@ -119,7 +137,7 @@ static LogicalResult implSignature(LayoutOp layout, ImplKind kind, qtt::CtorType
     return success();
   case ImplKind::Borrow:
     inputs.push_back(storage);
-    results.push_back(layout.getViewFor(ctor));
+    results.push_back(view);
     return success();
   }
   return failure();
@@ -249,9 +267,14 @@ LogicalResult LayoutOp::verify() {
     return emitOpError("missing discriminate implementation");
   if (!lookupImpl(*this, ImplKind::Borrow))
     return emitOpError("missing borrow implementation for ADT");
+  for (ImplKind kind : {ImplKind::Clone, ImplKind::Drop})
+    if (!lookupImpl(*this, kind))
+      return emitOpError() << "missing " << stringifyImplKind(kind)
+                           << " implementation for ADT";
   for (auto ctor : adt.getCtors())
     for (ImplKind kind :
-         {ImplKind::Pack, ImplKind::Upcast, ImplKind::Downcast, ImplKind::Unpack, ImplKind::Borrow})
+         {ImplKind::Pack, ImplKind::Upcast, ImplKind::Downcast, ImplKind::Unpack,
+          ImplKind::Borrow, ImplKind::Clone, ImplKind::Drop})
       if (!lookupImpl(*this, kind, ctor))
         return emitOpError() << "missing " << stringifyImplKind(kind) << " implementation for "
                              << ctor.getName();
@@ -316,6 +339,9 @@ static LogicalResult verifyPrimitive(Operation *op, ImplKind kind) {
       return op->emitOpError("requires a constructor refinement");
     Type adt = OwnType::get(op->getContext(), own.getLayout(), Type{});
     switch (kind) {
+    case ImplKind::Clone:
+    case ImplKind::Drop:
+      llvm_unreachable("ownership implementations do not have QREP primitive ops");
     case ImplKind::Pack:
       for (Type field : ctor.getPayload())
         inputs.push_back(representation(layout, field, true));

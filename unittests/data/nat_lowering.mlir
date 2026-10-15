@@ -7,6 +7,24 @@ module {
     constructors = [{constructor = !z, storage = none, view = none},
                     {constructor = !s, storage = i64, view = i64}]
   } {
+    qrep.impl clone(%n: i64) {
+      qrep.yield %n : i64
+    }
+    qrep.impl drop(%n: i64) {
+      qrep.yield
+    }
+    qrep.impl clone(%n: none) {
+      qrep.yield %n : none
+    } {constructor = !z}
+    qrep.impl drop(%n: none) {
+      qrep.yield
+    } {constructor = !z}
+    qrep.impl clone(%n: i64) {
+      qrep.yield %n : i64
+    } {constructor = !s}
+    qrep.impl drop(%n: i64) {
+      qrep.yield
+    } {constructor = !s}
     qrep.impl borrow(%n: i64) {
       qrep.yield %n : i64
     }
