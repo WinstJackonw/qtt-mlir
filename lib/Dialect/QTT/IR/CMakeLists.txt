@@ -1,6 +1,7 @@
 add_mlir_dialect_library(QTTMLIRQTTIR
   QTTDialect.cpp
   QTTOps.cpp
+  QTTFunctionOps.cpp
   QTTTypes.cpp
 
   ADDITIONAL_HEADER_DIRS
@@ -14,4 +15,6 @@ add_mlir_dialect_library(QTTMLIRQTTIR
     MLIRIR
     MLIRSupport
     MLIRFuncDialect
+    MLIRCallInterfaces
+    MLIRFunctionInterfaces
 )

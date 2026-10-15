@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "mlir/AsmParser/AsmParser.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Diagnostics.h"
@@ -115,7 +116,7 @@ private:
 };
 
 inline void loadDialects(mlir::MLIRContext &ctx) {
-  ctx.loadDialect<mlir::qtt::QTTDialect>();
+  ctx.loadDialect<mlir::arith::ArithDialect, mlir::qtt::QTTDialect>();
   ctx.getOrLoadDialect<mlir::func::FuncDialect>();
 }
 

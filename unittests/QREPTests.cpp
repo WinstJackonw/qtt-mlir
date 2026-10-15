@@ -196,6 +196,31 @@ static void checkValues(ModuleOp module) {
   for (uint64_t n : {uint64_t(0), uint64_t(1), uint64_t(42), uint64_t(1) << 63, UINT64_MAX - 2})
     EXPECT(run("succ", n) == n + 1);
   for (uint64_t n : {uint64_t(0), uint64_t(1), uint64_t(42), uint64_t(1) << 63, UINT64_MAX - 1}) {
+    EXPECT(run("fn_identity", n) == n);
+    EXPECT(run("fn_pred", n) == (n ? n - 1 : 0));
+    if (n < UINT64_MAX - 1)
+      EXPECT(run("fn_direct", n) == n);
+    if (n < 100)
+      EXPECT(run("fn_recursive", n) == 0);
+    auto noResultEntry = module.lookupSymbol<func::FuncOp>("fn_void");
+    DenseMap<Value, uint64_t> entryValues;
+    entryValues[noResultEntry.getArgument(0)] = n;
+    EXPECT(evaluate(module, noResultEntry.getBody().front(), entryValues).empty());
+    for (uint64_t m : {uint64_t(0), uint64_t(3)}) {
+      for (StringRef name : {"fn_pair", "fn_partial"}) {
+        auto function = module.lookupSymbol<func::FuncOp>(name);
+        DenseMap<Value, uint64_t> args;
+        args[function.getArgument(0)] = n;
+        args[function.getArgument(1)] = m;
+        auto result = evaluate(module, function.getBody().front(), args);
+        SmallVector<uint64_t> expected;
+        if (name == "fn_pair")
+          expected = {n ? n - 1 : 0, n && m ? m - 1 : m};
+        else
+          expected = {n && !m ? n - 1 : n, m};
+        EXPECT(result == expected);
+      }
+    }
     EXPECT(run("pred", n) == (n ? n - 1 : 0));
     EXPECT(run("nested_pred", n) == (n > 1 ? n - 2 : 0));
     DenseMap<Value, uint64_t> values;
@@ -311,6 +336,13 @@ static void testLowering(bool custom, bool heterogeneous) {
     builder.setInsertionPoint(zExit);
     cf::CondBranchOp::create(builder, layout.getLoc(), value, firstExit, otherExit);
     zExit.erase();
+  }
+  auto functions = parseSourceString<ModuleOp>(readDataFile("function_lowering.mlir"), &ctx);
+  REQUIRE(functions);
+  while (!functions->getBody()->empty()) {
+    Operation &function = functions->getBody()->front();
+    function.setAttr("qrep.layout", FlatSymbolRefAttr::get(&ctx, layout.getSymName()));
+    function.moveBefore(module->getBody(), module->getBody()->end());
   }
   REQUIRE(succeeded(verify(*module)));
   std::string text = printOp(*module);

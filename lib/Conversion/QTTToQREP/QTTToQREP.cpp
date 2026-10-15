@@ -1,4 +1,5 @@
 #include "QTTMLIR/Conversion/QTTToQREP/QTTToQREP.h"
+#include "QTTFunctionLowering.h"
 #include "QTTMLIR/Dialect/QREP/IR/QREPOps.h"
 #include "QTTMLIR/Dialect/QTT/IR/QTTOps.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -152,9 +153,12 @@ public:
     return "Lower QTT using the function's selected QREP layout";
   }
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<qrep::QREPDialect, cf::ControlFlowDialect, scf::SCFDialect>();
+    registry.insert<qrep::QREPDialect, cf::ControlFlowDialect, scf::SCFDialect,
+                    func::FuncDialect>();
   }
   void runOnOperation() override {
+    if (failed(lowerQTTFunctions(getOperation())))
+      return signalPassFailure();
     bool orphan = false;
     getOperation().walk([&](Operation *op) {
       if (op->getName().getDialectNamespace() == "qtt" && !op->getParentOfType<func::FuncOp>()) {

@@ -1,5 +1,6 @@
 add_mlir_conversion_library(QTTMLIRQTTToQREP
   QTTToQREP.cpp
+  QTTFunctionLowering.cpp
 
   LINK_LIBS PUBLIC
     QTTMLIRQTTIR

@@ -4,6 +4,7 @@ target_link_libraries(QTTDialectTests PRIVATE
   QTTMLIRQTTIR
   QTTMLIRQREPIR
   QTTMLIRQTTToQREP
+  MLIRArithDialect
   MLIRParser
   MLIRFuncDialect
   MLIRTransforms
@@ -58,3 +59,14 @@ target_link_libraries(QREPTests PRIVATE
 target_compile_definitions(QREPTests PRIVATE
   "QTT_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
 add_test(NAME QREP.Nat COMMAND QREPTests)
+
+add_executable(QTTFunctionTests QTTFunctionTests.cpp)
+target_link_libraries(QTTFunctionTests PRIVATE
+  QTTMLIRQTTToQREP
+  MLIRArithDialect
+  MLIRParser
+  MLIRFuncDialect
+)
+target_compile_definitions(QTTFunctionTests PRIVATE
+  "QTT_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
+add_test(NAME QTT.Functions COMMAND QTTFunctionTests)
