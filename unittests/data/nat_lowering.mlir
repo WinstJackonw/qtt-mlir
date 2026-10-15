@@ -3,10 +3,19 @@
 !s = !qtt.ctor<"Nat", "S"(!nat)>
 module {
   qrep.layout @nat attributes {
-    adt = !nat, storage = i64,
-    constructors = [{constructor = !z, storage = none},
-                    {constructor = !s, storage = i64}]
+    adt = !nat, storage = i64, view = i64,
+    constructors = [{constructor = !z, storage = none, view = none},
+                    {constructor = !s, storage = i64, view = i64}]
   } {
+    qrep.impl borrow(%n: i64) {
+      qrep.yield %n : i64
+    }
+    qrep.impl borrow(%n: none) {
+      qrep.yield %n : none
+    } {constructor = !z}
+    qrep.impl borrow(%n: i64) {
+      qrep.yield %n : i64
+    } {constructor = !s}
     qrep.discriminate(%n: i64) {
       %zero = arith.constant 0 : i64
       %s = arith.cmpi ne, %n, %zero : i64
@@ -88,6 +97,13 @@ module {
     %s = qtt.construct %n : (!nat) -> !s
     %p = qtt.unpack %s : (!s) -> !nat
     return %p : !nat
+  }
+  func.func @nested_construct(%n: !nat) -> !nat attributes {qrep.layout = @nat} {
+    %s = qtt.construct %n : (!nat) -> !s
+    %a = qtt.upcast %s : !s to !nat
+    %ss = qtt.construct %a : (!nat) -> !s
+    %r = qtt.upcast %ss : !s to !nat
+    return %r : !nat
   }
   func.func @case_pair(%n: !nat) -> (!nat, !nat) attributes {qrep.layout = @nat} {
     %p, %original = qtt.case %n : !nat -> (!nat, !nat) {

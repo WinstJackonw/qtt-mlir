@@ -17,7 +17,7 @@ def QREP_Dialect : Dialect {
   let dependentDialects = ["::mlir::qtt::QTTDialect"];
   let cppNamespace = "::mlir::qrep";
   let useDefaultAttributePrinterParser = 1;
-  let useDefaultTypePrinterParser = false;
+  let useDefaultTypePrinterParser = 1;
 }
 
 #endif // QREP_DIALECT_TD__

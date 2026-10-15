@@ -8,7 +8,8 @@ def QREP_ImplKind : I32EnumAttr<"ImplKind", "layout primitive kind", [
     I32EnumAttrCase<"Pack", 0, "pack">,
     I32EnumAttrCase<"Upcast", 1, "upcast">,
     I32EnumAttrCase<"Downcast", 2, "downcast">,
-    I32EnumAttrCase<"Unpack", 3, "unpack">
+    I32EnumAttrCase<"Unpack", 3, "unpack">,
+    I32EnumAttrCase<"Borrow", 4, "borrow">
 ]> {
   let cppNamespace = "::mlir::qrep";
   let genSpecializedAttr = 0;

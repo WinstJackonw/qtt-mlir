@@ -24,8 +24,7 @@ static void testImplKinds() {
   auto layout = module->lookupSymbol<qrep::LayoutOp>("nat");
   auto adt = cast<qtt::ADTType>(layout.getAdt());
   for (auto ctor : adt.getCtors())
-    for (ImplKind kind : {ImplKind::Pack, ImplKind::Upcast, ImplKind::Downcast,
-                          ImplKind::Unpack}) {
+    for (ImplKind kind : {ImplKind::Pack, ImplKind::Upcast, ImplKind::Downcast, ImplKind::Unpack}) {
       auto impl = qrep::lookupImpl(layout, kind, ctor);
       REQUIRE(impl);
       EXPECT(impl.getKind() == kind);
@@ -55,8 +54,7 @@ static void testImplKinds() {
   // Enum keywords may also be quoted and normalize to unquoted keywords.
   auto pos = fixture.find("qrep.impl pack()");
   REQUIRE(pos != std::string::npos);
-  fixture.replace(pos, std::string("qrep.impl pack()").size(),
-                  "qrep.impl \"pack\"()");
+  fixture.replace(pos, std::string("qrep.impl pack()").size(), "qrep.impl \"pack\"()");
   auto quoted = parseSourceString<ModuleOp>(fixture, &ctx);
   REQUIRE(quoted);
   EXPECT(printOp(*quoted).find("qrep.impl pack()") != std::string::npos);
@@ -75,8 +73,7 @@ static void testImplKinds() {
       llvm::errs() << "Replacement: " << replacement << "\nExpected: " << message
                    << "\nReceived: " << diagnostics.getText();
   };
-  rejectedReplacement(fixture, "qrep.impl pack()", "qrep.impl unknown()",
-                      "ImplKind to be one of:");
+  rejectedReplacement(fixture, "qrep.impl pack()", "qrep.impl unknown()", "ImplKind to be one of:");
   rejectedReplacement(generic, "#qrep<impl_kind pack>", "\"pack\"",
                       "Invalid attribute `kind` in property conversion");
 
@@ -193,6 +190,7 @@ static void checkValues(ModuleOp module) {
   EXPECT(run("ctor_only", UINT64_MAX - 2) == UINT64_MAX - 2);
   EXPECT(run("call_succ", UINT64_MAX - 2) == UINT64_MAX - 1);
   EXPECT(run("cast_pred", UINT64_MAX - 1) == UINT64_MAX - 2);
+  EXPECT(run("nested_construct", 42) == 44);
   for (uint64_t n : {uint64_t(0), uint64_t(1), uint64_t(42), uint64_t(1) << 63, UINT64_MAX - 2})
     EXPECT(run("succ", n) == n + 1);
   for (uint64_t n : {uint64_t(0), uint64_t(1), uint64_t(42), uint64_t(1) << 63, UINT64_MAX - 1}) {
@@ -234,7 +232,7 @@ static void checkValues(ModuleOp module) {
   }
 }
 
-static void testLowering(bool custom, bool heterogeneous) {
+static void testLowering(bool custom, bool heterogeneous, bool distinctView = false) {
   MLIRContext ctx;
   load(ctx);
   auto module = parseSourceString<ModuleOp>(readDataFile("nat_lowering.mlir"), &ctx);
@@ -243,6 +241,34 @@ static void testLowering(bool custom, bool heterogeneous) {
   REQUIRE(layout);
   auto adt = cast<qtt::ADTType>(layout.getAdt());
   auto successor = adt.lookupCtor(StringAttr::get(&ctx, "S"));
+  if (distinctView) {
+    // Owned Nat stays i64; readonly Nat is index. Pack must see the latter.
+    OpBuilder builder(&ctx);
+    layout.setView(builder.getIndexType());
+    SmallVector<Attribute> entries;
+    for (Attribute attr : layout.getConstructors()) {
+      NamedAttrList entry(cast<DictionaryAttr>(attr));
+      if (entry.get("constructor") == TypeAttr::get(successor))
+        entry.set("view", TypeAttr::get(builder.getIndexType()));
+      entries.push_back(entry.getDictionary(&ctx));
+    }
+    layout.setConstructorsAttr(builder.getArrayAttr(entries));
+    for (qtt::CtorType ctor : {qtt::CtorType{}, successor}) {
+      auto borrow = qrep::lookupImpl(layout, ImplKind::Borrow, ctor);
+      Block &block = borrow.getBody().front();
+      builder.setInsertionPoint(block.getTerminator());
+      Value view = arith::IndexCastUIOp::create(builder, layout.getLoc(), builder.getIndexType(),
+                                                block.getArgument(0));
+      block.getTerminator()->setOperand(0, view);
+    }
+    auto pack = qrep::lookupImpl(layout, ImplKind::Pack, successor);
+    Block &block = pack.getBody().front();
+    block.getArgument(0).setType(builder.getIndexType());
+    builder.setInsertionPointToStart(&block);
+    Value storage = arith::IndexCastUIOp::create(builder, layout.getLoc(), builder.getI64Type(),
+                                                 block.getArgument(0));
+    block.getArgument(0).replaceAllUsesExcept(storage, storage.getDefiningOp());
+  }
   if (custom) {
     // A different, explicitly selected layout stores the predecessor in S.
     // Same physical i64, different encoding: casts must run the region bodies.
@@ -251,8 +277,7 @@ static void testLowering(bool custom, bool heterogeneous) {
     module->getBody()->push_back(alternate);
     layout = alternate;
     OpBuilder builder(&ctx);
-    for (ImplKind kind : {ImplKind::Pack, ImplKind::Unpack,
-                          ImplKind::Upcast, ImplKind::Downcast}) {
+    for (ImplKind kind : {ImplKind::Pack, ImplKind::Unpack, ImplKind::Upcast, ImplKind::Downcast}) {
       auto impl = qrep::lookupImpl(layout, kind, successor);
       Block &block = impl.getBody().front();
       while (!block.empty())
@@ -304,8 +329,16 @@ static void testLowering(bool custom, bool heterogeneous) {
       entries.push_back(entry.getDictionary(&ctx));
     }
     layout.setConstructorsAttr(builder.getArrayAttr(entries));
-    for (ImplKind kind : {ImplKind::Pack, ImplKind::Upcast,
-                          ImplKind::Downcast, ImplKind::Unpack}) {
+    // Borrow Z's new i1 storage into its existing none View.
+    auto borrow = qrep::lookupImpl(layout, ImplKind::Borrow, zero);
+    auto &borrowBlock = borrow.getBody().front();
+    borrowBlock.getArgument(0).setType(builder.getI1Type());
+    borrowBlock.back().erase();
+    builder.setInsertionPointToEnd(&borrowBlock);
+    auto unit = UnrealizedConversionCastOp::create(builder, layout.getLoc(),
+                                                   TypeRange{builder.getNoneType()}, ValueRange{});
+    qrep::YieldOp::create(builder, layout.getLoc(), unit.getResults());
+    for (ImplKind kind : {ImplKind::Pack, ImplKind::Upcast, ImplKind::Downcast, ImplKind::Unpack}) {
       auto impl = qrep::lookupImpl(layout, kind, zero);
       Block &block = impl.getBody().front();
       while (!block.empty())
@@ -356,6 +389,23 @@ static void testLowering(bool custom, bool heterogeneous) {
   EXPECT(printOp(*reparsed) == text);
   PassManager pm(&ctx);
   pm.addPass(createQTTToQREPConversionPass());
+  REQUIRE(succeeded(pm.run(*module)));
+  REQUIRE(succeeded(verify(*module)));
+  EXPECT(printOp(module->lookupSymbol<func::FuncOp>("succ")).find("qrep.borrow") !=
+         std::string::npos);
+  EXPECT(printOp(module->lookupSymbol<func::FuncOp>("succ")).find("!qrep.view<") !=
+         std::string::npos);
+  // Both custom and generic intermediate IR must survive a fresh context.
+  for (bool generic : {false, true}) {
+    std::string intermediate;
+    llvm::raw_string_ostream stream(intermediate);
+    module->print(stream, OpPrintingFlags().printGenericOpForm(generic));
+    MLIRContext roundtrip;
+    load(roundtrip);
+    REQUIRE(parseSourceString<ModuleOp>(intermediate, &roundtrip));
+  }
+  pm.clear();
+  pm.addPass(createQREPToStorageConversionPass());
   REQUIRE(succeeded(pm.run(*module)));
   REQUIRE(succeeded(verify(*module)));
   for (auto function : module->getOps<func::FuncOp>()) {
@@ -436,15 +486,15 @@ static void testErrors() {
   });
   invalidConstructor([](qrep::LayoutOp layout, qtt::ADTType adt, NamedAttrList &entry) {
     auto zero = adt.getCtors().front();
-    auto foreign = qtt::ADTType::get(adt.getContext(),
-                                     StringAttr::get(adt.getContext(), "ForeignNat"));
+    auto foreign =
+        qtt::ADTType::get(adt.getContext(), StringAttr::get(adt.getContext(), "ForeignNat"));
     auto ctor = qtt::CtorType::get(foreign, zero.getName(), zero.getPayload());
     EXPECT(!layout.getStorageFor(ctor));
     entry.set("constructor", TypeAttr::get(ctor));
   });
   invalidConstructor([](qrep::LayoutOp layout, qtt::ADTType adt, NamedAttrList &entry) {
     auto ctor = qtt::CtorType::get(adt, adt.getCtors().front().getName(),
-                                  {IntegerType::get(adt.getContext(), 64)});
+                                   {IntegerType::get(adt.getContext(), 64)});
     EXPECT(!layout.lookupConstructor(ctor));
     EXPECT(!layout.getStorageFor(ctor));
     entry.set("constructor", TypeAttr::get(ctor));
@@ -465,8 +515,9 @@ static void testErrors() {
         layout.getBody().front().push_back(impl->clone());
       },
       "duplicate primitive implementation");
-  invalidImpl(ImplKind::Pack, [](qrep::LayoutOp, qrep::ImplOp impl) { impl.erase(); },
-              "missing pack implementation");
+  invalidImpl(
+      ImplKind::Pack, [](qrep::LayoutOp, qrep::ImplOp impl) { impl.erase(); },
+      "missing pack implementation");
   invalidImpl(
       ImplKind::Upcast,
       [](qrep::LayoutOp layout, qrep::ImplOp impl) {
@@ -568,6 +619,130 @@ static void testErrors() {
   EXPECT(diagnostics.contains("caller and callee to select the same layout"));
 }
 
+static void testViewContracts() {
+  MLIRContext ctx;
+  load(ctx);
+  auto fixture = readDataFile("nat_lowering.mlir");
+  auto module = parseSourceString<ModuleOp>(fixture, &ctx);
+  REQUIRE(module);
+  auto layout = module->lookupSymbol<qrep::LayoutOp>("nat");
+  auto adt = cast<qtt::ADTType>(layout.getAdt());
+  auto ctor = adt.getCtors().back();
+  auto ref = FlatSymbolRefAttr::get(&ctx, "nat");
+  Type own = qrep::OwnType::get(&ctx, ref, Type{});
+  Type view = qrep::ViewType::get(&ctx, ref, Type{});
+  Type ownCtor = qrep::OwnType::get(&ctx, ref, ctor);
+  Type viewCtor = qrep::ViewType::get(&ctx, ref, ctor);
+  for (Type type : {own, view, ownCtor, viewCtor})
+    EXPECT(parseType(printType(type), &ctx) == type);
+  EXPECT(layout.getViewFor(adt) == layout.getView());
+  EXPECT(layout.getViewFor(ctor) == IntegerType::get(&ctx, 64));
+
+  auto invalidLayout = [&](auto change, StringRef expected) {
+    auto invalid = parseSourceString<ModuleOp>(fixture, &ctx);
+    auto selected = invalid->lookupSymbol<qrep::LayoutOp>("nat");
+    change(selected);
+    DiagnosticCapture diagnostics(ctx);
+    EXPECT(failed(verify(*invalid)));
+    EXPECT(diagnostics.contains(expected));
+  };
+  invalidLayout([](qrep::LayoutOp l) { l->removeAttr("view"); }, "view");
+  invalidLayout([](qrep::LayoutOp l) { l.setView(l.getAdt()); }, "concrete ADT view");
+  invalidLayout(
+      [](qrep::LayoutOp l) {
+        SmallVector<Attribute> entries(l.getConstructors().begin(), l.getConstructors().end());
+        NamedAttrList entry(cast<DictionaryAttr>(entries.front()));
+        entry.erase("view");
+        entries.front() = entry.getDictionary(l.getContext());
+        l.setConstructorsAttr(ArrayAttr::get(l.getContext(), entries));
+      },
+      "concrete constructor view");
+  invalidLayout([](qrep::LayoutOp l) { qrep::lookupImpl(l, ImplKind::Borrow).erase(); },
+                "missing borrow implementation for ADT");
+  invalidLayout(
+      [](qrep::LayoutOp l) {
+        auto ctor = cast<qtt::ADTType>(l.getAdt()).getCtors().back();
+        qrep::lookupImpl(l, ImplKind::Borrow, ctor).erase();
+      },
+      "missing borrow implementation for");
+  invalidLayout([](qrep::LayoutOp l) { l.setView(IndexType::get(l.getContext())); },
+                "implementation yield does not match storage signature");
+
+  // A readonly function argument can feed pack directly, without another borrow.
+  OpBuilder builder(module->getBodyRegion());
+  builder.setInsertionPointToEnd(module->getBody());
+  auto function = func::FuncOp::create(builder, layout.getLoc(), "from_view",
+                                       builder.getFunctionType({view}, {ownCtor}));
+  function->setAttr("qrep.layout", ref);
+  Block *block = function.addEntryBlock();
+  builder.setInsertionPointToEnd(block);
+  auto pack =
+      qrep::PackOp::create(builder, layout.getLoc(), TypeRange{ownCtor}, block->getArguments());
+  func::ReturnOp::create(builder, layout.getLoc(), pack.getResults());
+  REQUIRE(succeeded(verify(*module)));
+  {
+    DiagnosticCapture diagnostics(ctx);
+    // Equal physical types do not make owned input legal for pack.
+    block->getArgument(0).setType(own);
+    EXPECT(failed(verify(pack)));
+    EXPECT(diagnostics.contains("representation signature"));
+    block->getArgument(0).setType(view);
+  }
+  {
+    DiagnosticCapture diagnostics(ctx);
+    Type missing = qrep::OwnType::get(&ctx, FlatSymbolRefAttr::get(&ctx, "missing"), ctor);
+    pack.getResult(0).setType(missing);
+    EXPECT(failed(verify(pack)));
+    EXPECT(diagnostics.contains("must reference a qrep.layout symbol"));
+    auto foreign = qtt::ADTType::get(&ctx, StringAttr::get(&ctx, "ForeignView"));
+    auto wrongCtor = qtt::CtorType::get(foreign, ctor.getName(), ctor.getPayload());
+    pack.getResult(0).setType(qrep::OwnType::get(&ctx, ref, wrongCtor));
+    EXPECT(failed(verify(pack)));
+    EXPECT(diagnostics.contains("constructor refinement must be declared"));
+    pack.getResult(0).setType(ownCtor);
+  }
+  // Constructor borrowing preserves refinement and leaves the owner usable.
+  builder.setInsertionPointToEnd(module->getBody());
+  auto borrowing = func::FuncOp::create(builder, layout.getLoc(), "borrow_ctor",
+                                        builder.getFunctionType({ownCtor}, {viewCtor, ownCtor}));
+  borrowing->setAttr("qrep.layout", ref);
+  Block *borrowBlock = borrowing.addEntryBlock();
+  builder.setInsertionPointToEnd(borrowBlock);
+  auto borrow = qrep::BorrowOp::create(builder, layout.getLoc(), TypeRange{viewCtor},
+                                       borrowBlock->getArguments());
+  func::ReturnOp::create(builder, layout.getLoc(),
+                         ValueRange{borrow.getResult(0), borrowBlock->getArgument(0)});
+  REQUIRE(succeeded(verify(*module)));
+  {
+    DiagnosticCapture diagnostics(ctx);
+    borrow.getResult(0).setType(view);
+    EXPECT(failed(verify(borrow)));
+    EXPECT(diagnostics.contains("representation signature"));
+    borrow.getResult(0).setType(viewCtor);
+  }
+  // Equal physical types still run the layout's borrow encoding.
+  auto implementation = qrep::lookupImpl(layout, ImplKind::Borrow, ctor);
+  builder.setInsertionPoint(implementation.getBody().front().getTerminator());
+  Value one = arith::ConstantIntOp::create(builder, layout.getLoc(), 1, 64);
+  Value encoded = arith::AddIOp::create(builder, layout.getLoc(),
+                                        implementation.getBody().front().getArgument(0), one);
+  implementation.getBody().front().getTerminator()->setOperand(0, encoded);
+  PassManager pm(&ctx);
+  pm.addPass(createQTTToQREPConversionPass());
+  REQUIRE(succeeded(pm.run(*module)));
+  unsigned borrows = 0;
+  function.walk([&](qrep::BorrowOp) { ++borrows; });
+  EXPECT(borrows == 0);
+  pm.clear();
+  pm.addPass(createQREPToStorageConversionPass());
+  REQUIRE(succeeded(pm.run(*module)));
+  DenseMap<Value, uint64_t> values;
+  values[function.getArgument(0)] = 41;
+  EXPECT(evaluate(*module, function.getBody().front(), values).front() == 42);
+  values[borrowing.getArgument(0)] = 42;
+  EXPECT((evaluate(*module, borrowing.getBody().front(), values) == SmallVector<uint64_t>{43, 42}));
+}
+
 int main() {
   currentTest = "QREPLayout";
   testImplKinds();
@@ -575,6 +750,8 @@ int main() {
   testLowering(true, false);
   testLowering(false, true);
   testLowering(true, true);
+  testLowering(false, false, true);
   testErrors();
+  testViewContracts();
   return failures ? 1 : 0;
 }

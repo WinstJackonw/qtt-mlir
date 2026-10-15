@@ -17,14 +17,40 @@ class QREP_Op<string mnemonic, list<Trait> traits = []> : Op<QREP_Dialect, mnemo
 def QREP_LayoutOp : QREP_Op<"layout", [Symbol, IsolatedFromAbove, SingleBlock, NoTerminator]> {
   let summary = "Named ADT storage and representation implementation";
   let arguments = (ins SymbolNameAttr:$sym_name, TypeAttr:$adt,
-                       TypeAttr:$storage, ArrayAttr:$constructors);
+                       TypeAttr:$storage, TypeAttr:$view, ArrayAttr:$constructors);
   let regions = (region AnyRegion:$body);
   let assemblyFormat = "$sym_name attr-dict-with-keyword $body";
   let hasVerifier = 1;
   let extraClassDeclaration = [{
     ::mlir::DictionaryAttr lookupConstructor(::mlir::qtt::CtorType ctor);
     ::mlir::Type getStorageFor(::mlir::Type source);
+    ::mlir::Type getViewFor(::mlir::Type source);
   }];
+}
+
+// Runtime operations retain layout identity until lower-qrep resolves physical types.
+class QREP_Primitive<string mnemonic> : QREP_Op<mnemonic> {
+  let arguments = (ins Variadic<AnyType>:$inputs);
+  let results = (outs Variadic<AnyType>:$outputs);
+  let assemblyFormat = "$inputs attr-dict `:` functional-type($inputs, $outputs)";
+  let hasVerifier = 1;
+}
+def QREP_PackOp : QREP_Primitive<"pack">;
+def QREP_UnpackOp : QREP_Primitive<"unpack">;
+def QREP_UpcastOp : QREP_Primitive<"upcast">;
+def QREP_DowncastOp : QREP_Primitive<"downcast">;
+def QREP_BorrowOp : QREP_Primitive<"borrow">;
+
+def QREP_CaseOp : QREP_Op<"case"> {
+  let arguments = (ins AnyType:$input);
+  let results = (outs Variadic<AnyType>:$results);
+  let regions = (region VariadicRegion<AnyRegion>:$cases);
+  let hasVerifier = 1;
+}
+def QREP_CaseYieldOp : QREP_Op<"case_yield", [Terminator, Pure, HasParent<"CaseOp">]> {
+  let arguments = (ins Variadic<AnyType>:$values);
+  let assemblyFormat = "attr-dict ($values^ `:` type($values))?";
+  let hasVerifier = 1;
 }
 
 def QREP_ImplOp : QREP_Op<"impl", [IsolatedFromAbove, HasParent<"LayoutOp">]> {

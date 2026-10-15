@@ -13,7 +13,8 @@ static mlir::ParseResult parseImplementationBody(mlir::OpAsmParser &parser, mlir
   return parser.parseRegion(body, arguments);
 }
 
-static void printImplementationBody(mlir::OpAsmPrinter &printer, mlir::Operation *, mlir::Region &body) {
+static void printImplementationBody(mlir::OpAsmPrinter &printer, mlir::Operation *,
+                                    mlir::Region &body) {
   printer << "(";
   llvm::interleaveComma(body.front().getArguments(), printer,
                         [&](mlir::BlockArgument arg) { printer.printRegionArgument(arg); });
@@ -49,6 +50,18 @@ Type LayoutOp::getStorageFor(Type source) {
   return isa<qtt::ADTType>(source) ? Type{} : source;
 }
 
+Type LayoutOp::getViewFor(Type source) {
+  if (source == getAdt())
+    return getView();
+  if (auto ctor = dyn_cast<qtt::CtorType>(source)) {
+    if (auto entry = lookupConstructor(ctor))
+      if (auto view = entry.getAs<TypeAttr>("view"))
+        return view.getValue();
+    return {};
+  }
+  return isa<qtt::ADTType>(source) ? Type{} : source;
+}
+
 ImplOp qrep::lookupImpl(LayoutOp layout, ImplKind kind, qtt::CtorType ctor) {
   for (auto impl : layout.getBody().front().getOps<ImplOp>()) {
     Type source = impl.getConstructor().value_or(Type{});
@@ -65,8 +78,12 @@ DiscriminateOp qrep::lookupDiscriminate(LayoutOp layout) {
 }
 
 static LogicalResult implSignature(LayoutOp layout, ImplKind kind, qtt::CtorType ctor,
-                                   SmallVectorImpl<Type> &inputs,
-                                   SmallVectorImpl<Type> &results) {
+                                   SmallVectorImpl<Type> &inputs, SmallVectorImpl<Type> &results) {
+  if (kind == ImplKind::Borrow && !ctor) {
+    inputs.push_back(layout.getStorage());
+    results.push_back(layout.getView());
+    return success();
+  }
   if (!ctor || ctor.getParent() != layout.getAdt())
     return failure();
   auto adt = cast<qtt::ADTType>(layout.getAdt());
@@ -77,7 +94,8 @@ static LogicalResult implSignature(LayoutOp layout, ImplKind kind, qtt::CtorType
     return failure();
   SmallVector<Type> fields;
   for (Type payload : ctor.getPayload()) {
-    Type field = layout.getStorageFor(payload);
+    Type field =
+        kind == ImplKind::Pack ? layout.getViewFor(payload) : layout.getStorageFor(payload);
     if (!field)
       return failure();
     fields.push_back(field);
@@ -98,6 +116,10 @@ static LogicalResult implSignature(LayoutOp layout, ImplKind kind, qtt::CtorType
   case ImplKind::Unpack:
     inputs.push_back(storage);
     results.append(fields);
+    return success();
+  case ImplKind::Borrow:
+    inputs.push_back(storage);
+    results.push_back(layout.getViewFor(ctor));
     return success();
   }
   return failure();
@@ -179,13 +201,15 @@ LogicalResult LayoutOp::verify() {
   if (!adt || !adt.isInitialized() || adt.getCtors().empty())
     return emitOpError("requires a defined nonempty ADT");
   auto isConcrete = [](Type type) {
-    return type && !isa<qtt::ADTType, qtt::CtorType, NoneType>(type);
+    return type && !isa<qtt::ADTType, qtt::CtorType, OwnType, ViewType, NoneType>(type);
   };
   auto isConstructorStorage = [](Type type) {
-    return type && !isa<qtt::ADTType, qtt::CtorType>(type);
+    return type && !isa<qtt::ADTType, qtt::CtorType, OwnType, ViewType>(type);
   };
   if (!isConcrete(getStorage()))
     return emitOpError("requires concrete ADT storage");
+  if (!isConcrete(getView()))
+    return emitOpError("requires concrete ADT view");
   if (getConstructors().size() != adt.getCtors().size())
     return emitOpError("requires exactly one entry per constructor");
   llvm::DenseSet<Type> constructors;
@@ -196,11 +220,14 @@ LogicalResult LayoutOp::verify() {
     auto constructor = entry.getAs<TypeAttr>("constructor");
     auto ctor = constructor ? dyn_cast<qtt::CtorType>(constructor.getValue()) : qtt::CtorType{};
     auto storage = entry.getAs<TypeAttr>("storage");
+    auto view = entry.getAs<TypeAttr>("view");
     if (!ctor || ctor.getParent() != adt || adt.lookupCtor(ctor.getName()) != ctor ||
         !constructors.insert(ctor).second)
       return emitOpError("constructors must be declared CtorTypes and unique");
     if (!storage || !isConstructorStorage(storage.getValue()))
       return emitOpError("requires concrete constructor storage or none");
+    if (!view || !isConstructorStorage(view.getValue()))
+      return emitOpError("requires concrete constructor view or none");
   }
   if (getBody().front().getNumArguments() != 0)
     return emitOpError("layout body cannot have runtime arguments");
@@ -220,11 +247,135 @@ LogicalResult LayoutOp::verify() {
   }
   if (!discriminators)
     return emitOpError("missing discriminate implementation");
+  if (!lookupImpl(*this, ImplKind::Borrow))
+    return emitOpError("missing borrow implementation for ADT");
   for (auto ctor : adt.getCtors())
-    for (ImplKind kind : {ImplKind::Pack, ImplKind::Upcast, ImplKind::Downcast,
-                          ImplKind::Unpack})
+    for (ImplKind kind :
+         {ImplKind::Pack, ImplKind::Upcast, ImplKind::Downcast, ImplKind::Unpack, ImplKind::Borrow})
       if (!lookupImpl(*this, kind, ctor))
-        return emitOpError() << "missing " << stringifyImplKind(kind)
-                             << " implementation for " << ctor.getName();
+        return emitOpError() << "missing " << stringifyImplKind(kind) << " implementation for "
+                             << ctor.getName();
+  return success();
+}
+
+// Resolve symbols at the use, since representation types themselves have no scope.
+static LayoutOp resolveRepresentation(Operation *op, Type type) {
+  FlatSymbolRefAttr ref;
+  Type constructor;
+  if (auto own = dyn_cast<OwnType>(type)) {
+    ref = own.getLayout();
+    constructor = own.getConstructor();
+  } else if (auto view = dyn_cast<ViewType>(type)) {
+    ref = view.getLayout();
+    constructor = view.getConstructor();
+  } else {
+    return {};
+  }
+  auto layout = SymbolTable::lookupNearestSymbolFrom<LayoutOp>(op, ref);
+  if (!layout) {
+    op->emitOpError("representation type must reference a qrep.layout symbol");
+    return {};
+  }
+  if (constructor && !layout.lookupConstructor(cast<qtt::CtorType>(constructor))) {
+    op->emitOpError("constructor refinement must be declared by the referenced layout");
+    return {};
+  }
+  return layout;
+}
+
+static Type representation(LayoutOp layout, Type source, bool view) {
+  Type ctor;
+  if (isa<qtt::CtorType>(source))
+    ctor = source;
+  else if (!isa<qtt::ADTType>(source))
+    return source;
+  if (!layout.getStorageFor(source))
+    return {};
+  auto ref = FlatSymbolRefAttr::get(layout.getSymNameAttr());
+  return view ? Type(ViewType::get(layout.getContext(), ref, ctor))
+              : Type(OwnType::get(layout.getContext(), ref, ctor));
+}
+
+static LogicalResult verifyPrimitive(Operation *op, ImplKind kind) {
+  bool outputBased = kind == ImplKind::Pack || kind == ImplKind::Downcast;
+  TypeRange anchor =
+      outputBased ? TypeRange(op->getResultTypes()) : TypeRange(op->getOperandTypes());
+  if (anchor.size() != 1 || !isa<OwnType>(anchor.front()))
+    return op->emitOpError("requires one owned representation value");
+  auto own = cast<OwnType>(anchor.front());
+  auto layout = resolveRepresentation(op, own);
+  if (!layout)
+    return failure();
+  auto ctor = dyn_cast_or_null<qtt::CtorType>(own.getConstructor());
+  SmallVector<Type> inputs, results;
+  if (kind == ImplKind::Borrow) {
+    inputs.push_back(own);
+    results.push_back(ViewType::get(op->getContext(), own.getLayout(), own.getConstructor()));
+  } else {
+    if (!ctor)
+      return op->emitOpError("requires a constructor refinement");
+    Type adt = OwnType::get(op->getContext(), own.getLayout(), Type{});
+    switch (kind) {
+    case ImplKind::Pack:
+      for (Type field : ctor.getPayload())
+        inputs.push_back(representation(layout, field, true));
+      results.push_back(own);
+      break;
+    case ImplKind::Unpack:
+      inputs.push_back(own);
+      for (Type field : ctor.getPayload())
+        results.push_back(representation(layout, field, false));
+      break;
+    case ImplKind::Upcast:
+      inputs.push_back(own);
+      results.push_back(adt);
+      break;
+    case ImplKind::Downcast:
+      inputs.push_back(adt);
+      results.push_back(own);
+      break;
+    case ImplKind::Borrow:
+      llvm_unreachable("handled above");
+    }
+  }
+  if (llvm::is_contained(inputs, Type{}) || llvm::is_contained(results, Type{}) ||
+      op->getOperandTypes() != TypeRange(inputs) || op->getResultTypes() != TypeRange(results))
+    return op->emitOpError("operands/results do not match representation signature");
+  return success();
+}
+
+LogicalResult PackOp::verify() { return verifyPrimitive(*this, ImplKind::Pack); }
+LogicalResult UnpackOp::verify() { return verifyPrimitive(*this, ImplKind::Unpack); }
+LogicalResult UpcastOp::verify() { return verifyPrimitive(*this, ImplKind::Upcast); }
+LogicalResult DowncastOp::verify() { return verifyPrimitive(*this, ImplKind::Downcast); }
+LogicalResult BorrowOp::verify() { return verifyPrimitive(*this, ImplKind::Borrow); }
+
+LogicalResult CaseOp::verify() {
+  auto own = dyn_cast<OwnType>(getInput().getType());
+  if (!own || own.getConstructor())
+    return emitOpError("requires an owned ADT value");
+  auto layout = resolveRepresentation(*this, own);
+  if (!layout)
+    return failure();
+  llvm::DenseSet<Type> seen;
+  for (Region &region : getCases()) {
+    if (!llvm::hasSingleElement(region) || region.front().getNumArguments() != 1)
+      return emitOpError("each case requires one block with one constructor argument");
+    auto type = dyn_cast<OwnType>(region.front().getArgument(0).getType());
+    if (!type || type.getLayout() != own.getLayout() || !type.getConstructor() ||
+        !layout.lookupConstructor(dyn_cast<qtt::CtorType>(type.getConstructor())) ||
+        !seen.insert(type.getConstructor()).second)
+      return emitOpError("case arguments must cover unique declared constructors");
+    if (region.front().empty() || !isa<CaseYieldOp>(region.front().back()))
+      return emitOpError("each case must end with qrep.case_yield");
+  }
+  if (seen.size() != layout.getConstructors().size())
+    return emitOpError("cases must cover every constructor");
+  return success();
+}
+
+LogicalResult CaseYieldOp::verify() {
+  if (getOperandTypes() != cast<CaseOp>((*this)->getParentOp()).getResultTypes())
+    return emitOpError("yield types must match case results");
   return success();
 }
