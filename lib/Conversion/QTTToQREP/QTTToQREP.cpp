@@ -71,7 +71,9 @@ public:
 
   LogicalResult matchAndRewrite(Operation *op, ArrayRef<Value> args,
                                 ConversionPatternRewriter &rewriter) const override {
-    if (op->getName().getDialectNamespace() != (abstract ? "qtt" : "qrep"))
+    bool ownershipOp = isa<qrep::CloneOp, qrep::DropOp>(op);
+    if ((abstract ? op->getName().getDialectNamespace() != "qtt" && !ownershipOp
+                  : op->getName().getDialectNamespace() != "qrep"))
       return failure();
     SmallVector<Type> results;
     if (failed(getTypeConverter()->convertTypes(op->getResultTypes(), results)))
@@ -93,6 +95,8 @@ public:
         name = "qrep.case";
       else if (isa<qtt::YieldOp>(op))
         name = "qrep.case_yield";
+      else if (isa<qrep::CloneOp, qrep::DropOp>(op))
+        name = op->getName().getStringRef();
       else
         return failure();
       SmallVector<Value> operands(args);
@@ -143,6 +147,11 @@ public:
       else
         rewriter.replaceOp(op, instantiate(layout, qrep::ImplKind::Downcast,
                                            cast<qtt::CtorType>(to), args, rewriter));
+    } else if (isa<qrep::CloneOp, qrep::DropOp>(op)) {
+      auto own = cast<qrep::OwnType>(op->getOperand(0).getType());
+      auto ctor = dyn_cast_or_null<qtt::CtorType>(own.getConstructor());
+      auto kind = isa<qrep::CloneOp>(op) ? qrep::ImplKind::Clone : qrep::ImplKind::Drop;
+      rewriter.replaceOp(op, instantiate(layout, kind, ctor, args, rewriter));
     } else if (auto match = dyn_cast<qrep::CaseOp>(op)) {
       // Clone the layout's CFG, preserving decoded SSA values and its choice
       // of control flow. execute_region only collects continuation results.
@@ -246,7 +255,8 @@ public:
     getOperation().walk([&](Operation *op) {
       bool runtime = op->getName().getDialectNamespace() == "qtt" ||
                      isa<qrep::PackOp, qrep::UnpackOp, qrep::UpcastOp, qrep::DowncastOp,
-                         qrep::BorrowOp, qrep::CaseOp, qrep::CaseYieldOp>(op);
+                         qrep::BorrowOp, qrep::CloneOp, qrep::DropOp, qrep::CaseOp,
+                         qrep::CaseYieldOp>(op);
       if (runtime && !op->getParentOfType<func::FuncOp>()) {
         op->emitError("QTT lowering requires an enclosing function with a qrep.layout annotation");
         orphan = true;
@@ -337,7 +347,8 @@ public:
       target.addIllegalDialect<qtt::QTTDialect>();
       if constexpr (!abstract)
         target.addIllegalOp<qrep::PackOp, qrep::UnpackOp, qrep::UpcastOp, qrep::DowncastOp,
-                            qrep::BorrowOp, qrep::CaseOp, qrep::CaseYieldOp>();
+                            qrep::BorrowOp, qrep::CloneOp, qrep::DropOp, qrep::CaseOp,
+                            qrep::CaseYieldOp>();
       target.markUnknownOpDynamicallyLegal([&](Operation *op) { return converter.isLegal(op); });
       target.addDynamicallyLegalOp<func::FuncOp>([&](func::FuncOp op) {
         return converter.isSignatureLegal(op.getFunctionType()) && converter.isLegal(&op.getBody());

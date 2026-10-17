@@ -1,0 +1,3 @@
+add_library(QTTMLIRRuntime STATIC runtime.c)
+target_include_directories(QTTMLIRRuntime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+set_target_properties(QTTMLIRRuntime PROPERTIES POSITION_INDEPENDENT_CODE ON)

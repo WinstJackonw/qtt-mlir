@@ -41,6 +41,12 @@ def QREP_UpcastOp : QREP_Primitive<"upcast">;
 def QREP_DowncastOp : QREP_Primitive<"downcast">;
 def QREP_BorrowOp : QREP_Primitive<"borrow">;
 
+// Ownership operations are resolved through the selected layout just like
+// pack/unpack. They are kept separate from the layout implementation ops so
+// that ownership effects are visible in executable IR.
+def QREP_CloneOp : QREP_Primitive<"clone">;
+def QREP_DropOp : QREP_Primitive<"drop">;
+
 def QREP_CaseOp : QREP_Op<"case"> {
   let arguments = (ins AnyType:$input);
   let results = (outs Variadic<AnyType>:$results);

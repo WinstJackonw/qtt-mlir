@@ -87,9 +87,9 @@ static LogicalResult implSignature(LayoutOp layout, ImplKind kind, qtt::CtorType
     return success();
   }
   if (ownership && !ctor) {
-    inputs.push_back(layout.getView());
+    inputs.push_back(layout.getStorage());
     if (kind == ImplKind::Clone)
-      results.push_back(layout.getView());
+      results.push_back(layout.getStorage());
     return success();
   }
   if (!ctor || ctor.getParent() != layout.getAdt())
@@ -102,9 +102,9 @@ static LogicalResult implSignature(LayoutOp layout, ImplKind kind, qtt::CtorType
   if (!storage || !view)
     return failure();
   if (ownership) {
-    inputs.push_back(view);
+    inputs.push_back(storage);
     if (kind == ImplKind::Clone)
-      results.push_back(view);
+      results.push_back(storage);
     return success();
   }
   SmallVector<Type> fields;
@@ -320,6 +320,30 @@ static Type representation(LayoutOp layout, Type source, bool view) {
 }
 
 static LogicalResult verifyPrimitive(Operation *op, ImplKind kind) {
+  if (kind == ImplKind::Clone || kind == ImplKind::Drop) {
+    if (op->getNumOperands() != 1 ||
+        (kind == ImplKind::Clone ? op->getNumResults() != 1 : op->getNumResults() != 0))
+      return op->emitOpError() << "requires one operand and "
+                               << (kind == ImplKind::Clone ? "one result" : "no results");
+
+    Type input = op->getOperand(0).getType();
+    if (isa<qtt::ADTType, qtt::CtorType>(input)) {
+      if (kind == ImplKind::Clone && op->getResult(0).getType() != input)
+        return op->emitOpError("clone result must have the input type");
+      return success();
+    }
+
+    auto own = dyn_cast<OwnType>(input);
+    if (!own)
+      return op->emitOpError("requires an ADT, constructor, or owned representation value");
+    auto layout = resolveRepresentation(op, own);
+    if (!layout)
+      return failure();
+    if (kind == ImplKind::Clone && op->getResult(0).getType() != input)
+      return op->emitOpError("clone result must have the input type");
+    return success();
+  }
+
   bool outputBased = kind == ImplKind::Pack || kind == ImplKind::Downcast;
   TypeRange anchor =
       outputBased ? TypeRange(op->getResultTypes()) : TypeRange(op->getOperandTypes());
@@ -375,6 +399,8 @@ LogicalResult UnpackOp::verify() { return verifyPrimitive(*this, ImplKind::Unpac
 LogicalResult UpcastOp::verify() { return verifyPrimitive(*this, ImplKind::Upcast); }
 LogicalResult DowncastOp::verify() { return verifyPrimitive(*this, ImplKind::Downcast); }
 LogicalResult BorrowOp::verify() { return verifyPrimitive(*this, ImplKind::Borrow); }
+LogicalResult CloneOp::verify() { return verifyPrimitive(*this, ImplKind::Clone); }
+LogicalResult DropOp::verify() { return verifyPrimitive(*this, ImplKind::Drop); }
 
 LogicalResult CaseOp::verify() {
   auto own = dyn_cast<OwnType>(getInput().getType());

@@ -42,6 +42,7 @@ include(cmake/Dependencies.cmake)
 
 add_subdirectory(include)
 add_subdirectory(lib)
+add_subdirectory(runtime)
 
 if(QTTMLIR_BUILD_TOOLS)
   add_subdirectory(tools)

@@ -72,3 +72,11 @@ target_link_libraries(QTTFunctionTests PRIVATE
 target_compile_definitions(QTTFunctionTests PRIVATE
   "QTT_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
 add_test(NAME QTT.Functions COMMAND QTTFunctionTests)
+
+add_executable(BufferTests BufferTests.cpp)
+target_link_libraries(BufferTests PRIVATE
+  QTTMLIRQTTToQREP QTTMLIRRuntime MLIRParser
+  MLIRLLVMToLLVMIRTranslation MLIRBuiltinToLLVMIRTranslation MLIRTargetLLVMIRExport)
+target_compile_definitions(BufferTests PRIVATE
+  "QTT_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
+add_test(NAME QREP.BufferLLVM COMMAND BufferTests)

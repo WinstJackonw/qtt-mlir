@@ -4,6 +4,12 @@
 #include <memory>
 
 namespace mlir {
+class OpPassManager;
+/// Convert storage-level func/arith/cf and unit values to LLVM, consuming layouts.
+std::unique_ptr<Pass> createQTTStorageToLLVMConversionPass();
+void registerQTTStorageToLLVMConversionPass();
+/// Full QTT -> QREP -> storage -> LLVM dialect pipeline.
+void buildQTTToLLVMPipeline(OpPassManager &pm);
 /// Lower QTT functions to func.func and constructor decision trees, retaining
 /// QTT value types. Default-only functions do not emit a qtt.case.
 std::unique_ptr<Pass> createQTTFunctionLoweringPass();
